@@ -68,8 +68,10 @@ pip install -r requirements-store.txt
 
 ```python
 from dataclasses import dataclass
-from store.base import Storable
+from store import connect, Storable
 from reactive import computed, effect
+
+db = connect("trading", user="alice", password="alice_pw")
 
 @dataclass
 class Position(Storable):
@@ -99,10 +101,13 @@ print(pos.market_value)     # 23000.0
 pos.current_price = 235.0   # triggers recomputation + effect
 print(pos.pnl)              # 1500.0
 
-# Persist it — same class, same object
-client.write(pos)            # CREATED event in the store
+# Persist — same object, same class
+pos.save()                   # CREATED event (version 1)
 pos.current_price = 240.0
-client.update(pos)           # UPDATED event
+pos.save()                   # UPDATED event (version 2)
+
+found = Position.find(pos._store_entity_id)
+pos.share("bob")             # RLS: bob can now read this position
 ```
 
 ---
@@ -114,14 +119,16 @@ An **append-only, bi-temporal, event-sourced** object store with embedded Postgr
 ### Core API
 
 ```python
-from store.client import StoreClient
+from store import connect
 
-client = StoreClient(user="alice", password="alice_pw",
-                     host=host, port=port, dbname=dbname)
+db = connect("trading", user="alice", password="alice_pw")
 
-entity_id = client.write(pos)                  # CREATED event
-client.update(pos)                             # UPDATED event (optimistic concurrency)
-client.delete(pos)                             # DELETED tombstone (soft delete)
+pos.save()                   # CREATED (first time) or UPDATED (subsequent)
+pos.delete()                 # DELETED tombstone (soft delete)
+pos.transition("CLOSED")     # STATE_CHANGE event
+
+found = Position.find(entity_id)               # read by ID
+page  = Position.query(filters={"symbol": "AAPL"})  # paginated query
 ```
 
 ### Bi-Temporal Queries
@@ -165,12 +172,9 @@ client.update(stale)                    # raises VersionConflict
 ### Batch Operations & Pagination
 
 ```python
-entity_ids = client.write_many(orders)           # atomic batch write
-client.update_many([o1, o2, o3])                 # atomic batch update
-
-page = client.query(Trade, filters={"side": "BUY"}, limit=50)
+page = Trade.query(filters={"side": "BUY"}, limit=50)
 if page.next_cursor:
-    page2 = client.query(Trade, filters={"side": "BUY"}, limit=50, cursor=page.next_cursor)
+    page2 = Trade.query(filters={"side": "BUY"}, limit=50, cursor=page.next_cursor)
 ```
 
 ### Row-Level Security & Permissions
@@ -178,17 +182,15 @@ if page.next_cursor:
 Every entity has an `owner`, `readers[]`, and `writers[]`. PostgreSQL RLS policies enforce visibility — users only see entities they own or have been granted access to.
 
 ```python
-from store.permissions import share_read, share_write, unshare
-
-share_read(conn, entity_id, "bob")       # bob can read
-share_write(conn, entity_id, "charlie")  # charlie can read + write
-unshare(conn, entity_id, "bob")          # revoke
+pos.share("bob")                    # bob can read
+pos.share("charlie", mode="write")  # charlie can read + write
+pos.unshare("bob")                  # revoke
 ```
 
 ### Audit Trail
 
 ```python
-trail = client.audit(entity_id)
+trail = pos.audit()
 for entry in trail:
     print(f"v{entry['version']} {entry['event_type']} by {entry['updated_by']} at {entry['tx_time']}")
 # v1 CREATED by alice at 2026-02-22 10:00:00

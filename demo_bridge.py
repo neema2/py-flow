@@ -50,7 +50,7 @@ from deephaven.execution_context import get_exec_ctx
 print("  Starting embedded PostgreSQL...")
 from store.server import ObjectStoreServer
 from store.schema import provision_user
-from store.client import StoreClient
+from store.connection import connect
 from store.base import Storable
 from dataclasses import dataclass
 
@@ -206,9 +206,9 @@ print()
 SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA"]
 BASE_PRICES = {"AAPL": 228, "GOOGL": 192, "MSFT": 415, "AMZN": 225, "TSLA": 355, "NVDA": 138}
 
-client = StoreClient(
-    user="demo_user", password="demo_pw",
+db = connect(
     host=conn_info["host"], port=conn_info["port"], dbname=conn_info["dbname"],
+    user="demo_user", password="demo_pw",
 )
 
 try:
@@ -222,12 +222,12 @@ try:
 
         # Write an Order to the STORE (goes through bridge → DH)
         order = Order(symbol=sym, quantity=qty, price=round(price, 2), side=side)
-        client.write(order)
+        order.save()
 
         # Write a corresponding Trade to the STORE
         pnl = round(random.gauss(0, qty * 0.5), 2)
         trade = Trade(symbol=sym, quantity=qty, price=round(price, 2), side=side, pnl=pnl)
-        client.write(trade)
+        trade.save()
 
         # Update the IN-MEMORY reactive graph (NO store write!)
         # This triggers: graph recomputes market_value + risk → effect pushes to DH
@@ -236,7 +236,7 @@ try:
         # Sometimes update an existing order (simulates state change)
         if tick % 3 == 0:
             order.price = round(price * 1.001, 2)
-            client.update(order)
+            order.save()
 
         print(f"  [{tick}] {side} {qty} {sym} @ ${price:.2f}  (pnl: ${pnl:+.2f})  [graph: mv={qty*price:.0f}]")
 
@@ -248,6 +248,6 @@ try:
 except KeyboardInterrupt:
     print("\n  Shutting down...")
     bridge.stop()
-    client.close()
+    db.close()
     store.stop()
     print("  Done!")

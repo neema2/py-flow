@@ -12,18 +12,23 @@ from reaktiv import Effect
 logger = logging.getLogger(__name__)
 
 
-def auto_persist_effect(obj, store_client):
+def auto_persist_effect(obj, store_client=None):
     """
     Create effects that write `obj` back to the store whenever
     any @computed value changes.
 
     Args:
         obj: A Storable instance with @computed properties
-        store_client: StoreClient instance (must have write access)
+        store_client: Optional StoreClient instance. If None, uses the
+                      active UserConnection from ``store.connect()``.
 
     Returns:
         List of Effect instances created (one per @computed on this object).
     """
+    if store_client is None:
+        from store.connection import get_connection
+        store_client = get_connection()._client
+
     computeds = object.__getattribute__(obj, '_computeds')
     effects = []
 

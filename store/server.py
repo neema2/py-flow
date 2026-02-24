@@ -151,6 +151,13 @@ class ObjectStoreServer:
             password=self.admin_password,
         )
 
+    def register_alias(self, name: str):
+        """Register this server's connection params under an alias name."""
+        from store.connection import register_alias
+        info = self.conn_info()
+        register_alias(name, host=info["host"], port=info["port"],
+                       dbname=info["dbname"])
+
     def conn_info(self):
         """Return connection parameters for this server."""
         uri = self._pg.get_uri()
