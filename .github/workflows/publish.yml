@@ -30,6 +30,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[server,client,dev]"
 
+      - name: Start Deephaven server
+        run: |
+          cd server
+          python -c "
+          exec(open('app.py').read())
+          import time
+          while True:
+              time.sleep(60)
+          " &
+          echo "Waiting for Deephaven server on port 10000..."
+          for i in $(seq 1 30); do
+            if python -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('localhost',10000)); s.close()" 2>/dev/null; then
+              echo "Deephaven server is ready!"
+              break
+            fi
+            echo "  attempt $i/30..."
+            sleep 2
+          done
+
       - name: Run tests
         run: pytest tests/ -x -q
 
