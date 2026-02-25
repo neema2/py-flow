@@ -136,32 +136,32 @@ Every event carries two time dimensions:
 | `valid_from` | When this fact becomes effective | User (defaults to now) |
 
 ```python
-trade = client.read(Trade, entity_id)                                   # current state
-versions = client.history(Trade, entity_id)                             # full history
-old = client.as_of(Trade, entity_id, tx_time=noon)                      # "what did we know at noon?"
-eff = client.as_of(Trade, entity_id, valid_time=ten_am)                 # "what was effective at 10am?"
-snap = client.as_of(Trade, entity_id, tx_time=noon, valid_time=ten_am)  # both dimensions
+trade = Trade.find(entity_id)                                           # current state
+versions = trade.history()                                              # full history
+old = Trade.as_of(entity_id, tx_time=noon)                              # "what did we know at noon?"
+eff = Trade.as_of(entity_id, valid_time=ten_am)                         # "what was effective at 10am?"
+snap = Trade.as_of(entity_id, tx_time=noon, valid_time=ten_am)          # both dimensions
 ```
 
 ### Backdated Corrections
 
 ```python
 trade.price = 151.25
-client.update(trade, valid_from=datetime(2026, 2, 22, 10, 0, tzinfo=timezone.utc))
+trade.save(valid_from=datetime(2026, 2, 22, 10, 0, tzinfo=timezone.utc))
 # event_type → "CORRECTED"
 ```
 
 ### Optimistic Concurrency
 
 ```python
-trade = client.read(Trade, entity_id)   # version=3
+trade = Trade.find(entity_id)            # version=3
 trade.price = 152.0
-client.update(trade)                    # version 3→4, succeeds
+trade.save()                             # version 3→4, succeeds
 
-stale = client.read(Trade, entity_id)   # version=4
+stale = Trade.find(entity_id)            # version=4
 # ... someone else updates to version 5 ...
 stale.price = 999.0
-client.update(stale)                    # raises VersionConflict
+stale.save()                             # raises VersionConflict
 ```
 
 ### Batch Operations & Pagination
@@ -330,10 +330,10 @@ Everything declared on the `Transition` — one place, one DSL.
 | **allowed_by** | Usernames permitted to trigger. Raises `TransitionNotPermitted`. |
 
 ```python
-client.write(order)                     # state → "PENDING"
-client.transition(order, "FILLED")      # guard passes → Tier 1/2/3 fire
-client.transition(order, "SETTLED")     # guard passes
-client.transition(order, "PENDING")     # raises InvalidTransition
+order.save()                             # state → "PENDING"
+order.transition("FILLED")               # guard passes → Tier 1/2/3 fire
+order.transition("SETTLED")              # guard passes
+order.transition("PENDING")              # raises InvalidTransition
 ```
 
 ---
@@ -365,7 +365,7 @@ Expressions are fully serializable via `to_json()` / `from_json()`.
 ### Examples
 
 ```python
-from reactive import Field, Const, If, Func
+from reactive.expr import Field, Const, If, Func
 
 pnl = (Field("current_price") - Field("avg_cost")) * Field("quantity")
 alert = If(pnl < Const(-5000), Const("STOP_LOSS"), Const("OK"))
@@ -375,6 +375,15 @@ intrinsic = If(
     Field("underlying_price") - Field("strike"),
     Const(0),
 )
+
+# Evaluate
+pnl.eval({"current_price": 235.0, "avg_cost": 220.0, "quantity": 100})  # 1500.0
+
+# Compile to SQL (for JSONB push-down)
+pnl.to_sql("data")   # ((data->>'current_price')::float - ...) * ...
+
+# Compile to Legend Pure
+pnl.to_pure("$pos")  # (($pos.current_price - $pos.avg_cost) * $pos.quantity)
 ```
 
 ---
@@ -436,6 +445,21 @@ print(book.total_pnl)       # 2000.0
 book.positions = [aapl]     # dynamic membership change
 ```
 
+### Computed Overrides (What-If Scenarios)
+
+Override any `@computed` value — the override ripples through the graph just like a formula change:
+
+```python
+pos = Position(symbol="AAPL", quantity=100, avg_cost=220.0, current_price=230.0)
+print(pos.pnl)              # 1000.0  (formula)
+
+pos.pnl = 5000.0            # override — downstream dependents see 5000.0
+print(pos.pnl)              # 5000.0  (override)
+
+pos.clear_override("pnl")   # revert to formula
+print(pos.pnl)              # 1000.0  (formula again)
+```
+
 ### Batch Updates
 
 ```python
@@ -459,7 +483,7 @@ Cross-entity methods (referencing other objects) use proxy-based runtime evaluat
 ```python
 from reactive.bridge import auto_persist_effect
 
-effects = auto_persist_effect(pos, store_client)
+effects = auto_persist_effect(pos)
 # Whenever any @computed value changes → auto-save back to the store
 ```
 
@@ -477,7 +501,8 @@ engine: WorkflowEngine = ...  # injected
 def order_to_trade(symbol, qty, price, side):
     oid = engine.step(create_order, symbol, qty, price, side)   # checkpointed
     engine.step(fill_order, oid)                                 # checkpointed
-    engine.step(client.write, Trade(symbol=symbol, quantity=qty, price=price, side=side))
+    trade = Trade(symbol=symbol, quantity=qty, price=price, side=side)
+    engine.step(trade.save)
 
 handle = engine.workflow(order_to_trade, "AAPL", 100, 150.0, "BUY")
 handle.get_status()   # PENDING | RUNNING | SUCCESS | ERROR
@@ -505,10 +530,10 @@ For multi-step state progressions inside workflows:
 ```python
 from workflow.dispatcher import WorkflowDispatcher
 
-dispatcher = WorkflowDispatcher(engine, client)
+dispatcher = WorkflowDispatcher(engine, db._client)
 
 def settlement_workflow(entity_id):
-    order = engine.step(lambda: client.read(Order, entity_id))
+    order = engine.step(lambda: Order.find(entity_id))
     engine.step(lambda: call_clearing_house(order))
     dispatcher.durable_transition(order, "SETTLED")   # checkpointed, exactly-once
 ```
@@ -528,7 +553,7 @@ bus.on("Order", lambda e: print(f"{e.event_type} on {e.entity_id}"))
 bus.on_entity(entity_id, lambda e: recalc_risk(e))
 bus.on_all(lambda e: audit_log(e))
 
-client = StoreClient(user="alice", ..., event_bus=bus)
+db = connect("trading", user="alice", password="alice_pw", event_bus=bus)
 
 # Tier 2: Cross-process — PG LISTEN/NOTIFY with durable catch-up
 listener = SubscriptionListener(
