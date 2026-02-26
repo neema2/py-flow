@@ -295,6 +295,36 @@ from bridge import StoreBridge
 
 ---
 
+## 8. Time-Series Database
+
+**Backend-agnostic historical market data storage.**
+
+```python
+from timeseries import TSDBBackend, TSDBConsumer, create_backend, Bar, HistoryQuery, BarQuery
+```
+
+| Symbol | Kind | Description |
+|--------|------|-------------|
+| `TSDBBackend` | ABC | Abstract base class for TSDB backends. Implement `start`, `stop`, `write_tick`, `flush`, `get_ticks`, `get_bars`, `get_latest`. |
+| `TSDBConsumer` | class | TickBus subscriber that routes every tick to a `TSDBBackend`. |
+| `create_backend(name)` | function | Factory — instantiates a backend by name. Default: `"questdb"`. Reads `TSDB_BACKEND` env var. |
+| `Bar` | Pydantic model | OHLCV bar: `symbol`, `interval`, `open`, `high`, `low`, `close`, `volume`, `trade_count`, `timestamp`. |
+| `HistoryQuery` | Pydantic model | Query params for raw tick history: `type`, `symbol`, `start`, `end`, `limit`. |
+| `BarQuery` | Pydantic model | Query params for OHLCV bars: `type`, `symbol`, `interval`, `start`, `end`. |
+
+### REST Endpoints (on market data server)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/md/history/{type}/{symbol}` | Raw tick history with time range and limit |
+| GET | `/md/bars/{type}/{symbol}` | OHLCV bars at a given interval |
+| GET | `/md/bars/{type}` | Bars for all symbols of a type |
+| GET | `/md/latest/{type}` | Latest tick(s) per symbol from TSDB |
+
+See [TIMESERIES.md](TIMESERIES.md) for full details.
+
+---
+
 ## Summary
 
 | Package | Symbols | Count |
@@ -303,4 +333,5 @@ from bridge import StoreBridge
 | **reactive** | `computed`, `effect` | 2 |
 | **workflow** | `WorkflowEngine`, `WorkflowStatus` | 2 |
 | **bridge** | `StoreBridge` | 1 |
-| **Total** | | **15** |
+| **timeseries** | `TSDBBackend`, `TSDBConsumer`, `create_backend`, `Bar`, `HistoryQuery`, `BarQuery` | 6 |
+| **Total** | | **21** |
