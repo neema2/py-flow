@@ -21,7 +21,6 @@ from store.connection import connect
 from store.state_machine import StateMachine, Transition
 from store.schema import provision_user
 from workflow.dbos_engine import DBOSEngine
-from workflow.dispatcher import WorkflowDispatcher
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +128,6 @@ def main():
         host=ci["host"], port=ci["port"], dbname=ci["dbname"],
         user="trader", password="trader_pw",
     )
-
-    # Also create a WorkflowDispatcher for multi-step workflows
-    dispatcher = WorkflowDispatcher(engine, db._client)
 
     # ── Demo 1: All three tiers on PENDING → FILLED ──────────────────
     print("\n── Demo 1: Transition PENDING → FILLED ─────────────────────")

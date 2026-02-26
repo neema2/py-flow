@@ -132,3 +132,21 @@ class WorkflowEngine(ABC):
 
         Raises TimeoutError on timeout, RuntimeError on workflow error.
         """
+
+    # ── Convenience ──────────────────────────────────────────────────
+
+    def durable_transition(self, obj, new_state, **kwargs) -> Any:
+        """Execute a state transition as a checkpointed workflow step.
+
+        Wraps ``obj.transition()`` in ``self.step()`` so the transition
+        is recorded — on crash recovery the step replays from its
+        checkpoint rather than re-executing the DB write.
+
+        Must be called inside an active workflow.
+        Uses the active store connection.
+        """
+        from store.connection import get_connection
+        client = get_connection()._client
+        return self.step(
+            lambda: client.transition(obj, new_state, **kwargs)
+        )

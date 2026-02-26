@@ -69,6 +69,8 @@ class UserConnection:
                  event_bus=None):
         self.user = user
         self.alias = alias
+        self._conn_params = dict(host=host, port=port, dbname=dbname,
+                                 user=user, password=password)
         self._client = StoreClient(
             user=user, password=password,
             host=host, port=port, dbname=dbname,

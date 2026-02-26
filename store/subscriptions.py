@@ -1,9 +1,13 @@
 """
 Event subscription system for the object store.
 
-Tier 1: In-process EventBus — synchronous callbacks after DB writes.
-Tier 2: PostgreSQL LISTEN/NOTIFY — cross-process real-time notifications.
-Tier 2.5: Durable catch-up — persisted high-water mark for crash recovery.
+Public API:
+    EventListener  — unified event listener (in-process or durable PG LISTEN).
+    ChangeEvent    — notification payload dataclass.
+
+Internal:
+    EventBus              — in-process dispatch (used by EventListener + StoreBridge).
+    SubscriptionListener  — PG LISTEN/NOTIFY thread (used by EventListener + StoreBridge).
 """
 
 import json
@@ -245,3 +249,103 @@ class SubscriptionListener:
                 """,
                 (self.subscriber_id, self._last_tx_time),
             )
+
+
+class EventListener:
+    """Unified event listener for store changes.
+
+    Mode is decided by a single parameter:
+
+        EventListener()                          → in-process only
+        EventListener(subscriber_id="my-svc")    → durable PG LISTEN/NOTIFY
+
+    In-process mode dispatches events synchronously via callbacks.
+    Durable mode additionally listens for cross-process PG notifications
+    using the active connection (from ``store.connect()``).  The PG listener
+    thread starts lazily on the first ``.on()`` / ``.on_entity()`` /
+    ``.on_all()`` call.
+
+    Use as a context manager for clean shutdown::
+
+        with EventListener(subscriber_id="x") as listener:
+            listener.on("Order", handle)
+    """
+
+    def __init__(self, subscriber_id=None):
+        self._bus = EventBus()
+        self._subscriber_id = subscriber_id
+        self._listener = None   # lazy SubscriptionListener
+        self._started = False
+
+    def _ensure_listener(self):
+        """Lazy-start the PG LISTEN thread if subscriber_id is set."""
+        if self._started or self._subscriber_id is None:
+            return
+        from store.connection import get_connection
+        conn = get_connection()
+        params = conn._conn_params
+        self._listener = SubscriptionListener(
+            event_bus=self._bus,
+            subscriber_id=self._subscriber_id,
+            **params,
+        )
+        self._listener.start()
+        self._started = True
+
+    # ── Subscribe ─────────────────────────────────────────────────────
+
+    def on(self, type_name, callback):
+        """Subscribe to all changes for a given type_name."""
+        self._bus.on(type_name, callback)
+        self._ensure_listener()
+
+    def on_entity(self, entity_id, callback):
+        """Subscribe to changes for a specific entity."""
+        self._bus.on_entity(entity_id, callback)
+        self._ensure_listener()
+
+    def on_all(self, callback):
+        """Subscribe to all changes regardless of type or entity."""
+        self._bus.on_all(callback)
+        self._ensure_listener()
+
+    # ── Unsubscribe ───────────────────────────────────────────────────
+
+    def off(self, type_name, callback):
+        """Unsubscribe a type listener."""
+        self._bus.off(type_name, callback)
+
+    def off_entity(self, entity_id, callback):
+        """Unsubscribe an entity listener."""
+        self._bus.off_entity(entity_id, callback)
+
+    def off_all(self, callback):
+        """Unsubscribe a catch-all listener."""
+        self._bus.off_all(callback)
+
+    # ── Emit (used internally by StoreClient) ─────────────────────────
+
+    def emit(self, event: ChangeEvent):
+        """Dispatch a ChangeEvent to all matching listeners."""
+        self._bus.emit(event)
+
+    # ── Lifecycle ─────────────────────────────────────────────────────
+
+    def _stop(self):
+        """Stop the PG listener thread (if running)."""
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
+        self._started = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._stop()
+
+    def __del__(self):
+        try:
+            self._stop()
+        except Exception:
+            pass
