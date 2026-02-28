@@ -252,6 +252,9 @@ class GeminiLLM(LLMClient):
                     response_data = json.loads(msg.content) if isinstance(msg.content, str) else msg.content
                 except (json.JSONDecodeError, TypeError):
                     response_data = {"result": msg.content}
+                # Gemini FunctionResponse requires a dict, not a list
+                if not isinstance(response_data, dict):
+                    response_data = {"result": response_data}
 
                 contents.append(types.Content(
                     role="user",
