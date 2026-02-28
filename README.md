@@ -867,6 +867,14 @@ python3 demo_three_tiers.py
 
 ---
 
+## Roadmap
+
+See **[ROADMAP.md](ROADMAP.md)** for the full platform roadmap — 9 phases, 57 steps across AI (vector search, LLM, agents/eval), scheduling/DAG, service management, data lineage, data quality, and dashboard/datacube.
+
+Track progress there: 🔲 planned → 🔧 in progress → ✅ done.
+
+---
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE)
