@@ -22,7 +22,8 @@ from media.models import bootstrap_search_schema, bootstrap_chunks_schema
 @pytest.fixture(scope="module")
 def pg_server():
     """Start embedded PG, provision user, bootstrap search schema with pgvector."""
-    server = ObjectStoreServer(data_dir="data/test_vector_search")
+    import tempfile
+    server = ObjectStoreServer(data_dir=tempfile.mkdtemp(prefix="test_vector_search_"))
     server.start()
 
     # Provision user + bootstrap search schema BEFORE any test connections

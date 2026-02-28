@@ -23,7 +23,8 @@ def pg_server():
     from store.schema import provision_user
     from media.models import bootstrap_search_schema, bootstrap_chunks_schema
 
-    server = ObjectStoreServer(data_dir="data/test_embed_upload")
+    import tempfile
+    server = ObjectStoreServer(data_dir=tempfile.mkdtemp(prefix="test_embed_upload_"))
     server.start()
 
     conn = server.admin_conn()
@@ -47,8 +48,9 @@ def minio_manager():
     """Start MinIO for S3 storage."""
     from lakehouse.services import MinIOManager
 
+    import tempfile
     minio = MinIOManager(
-        data_dir="data/test_embed_minio",
+        data_dir=tempfile.mkdtemp(prefix="test_embed_minio_"),
         api_port=9022,
         console_port=9023,
     )

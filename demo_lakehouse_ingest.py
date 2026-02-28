@@ -56,16 +56,19 @@ async def run_demo():
     print("  Lakehouse Ingest & Transform Demo")
     print("=" * 70)
 
-    # ── Start stack ──────────────────────────────────────────────────────
+    # ── Platform setup ─────────────────────────────────────────────────────
     section("Starting lakehouse stack")
-    from lakehouse.admin import start_lakehouse, stop_lakehouse
+    from lakehouse.admin import LakehouseServer
 
-    stack = await start_lakehouse(data_dir="data/demo_ingest")
-    print(f"  Catalog: {stack.catalog_url}")
-    print(f"  S3:      {stack.s3_endpoint}")
+    server = LakehouseServer(data_dir="data/demo_ingest")
+    await server.start()
+    server.register_alias("demo")
+    print(f"  Catalog: {server.catalog_url}")
+    print(f"  S3:      {server.s3_endpoint}")
 
+    # ── User code ──────────────────────────────────────────────────────────
     from lakehouse import Lakehouse
-    lh = Lakehouse(catalog_uri=stack.catalog_url, s3_endpoint=stack.s3_endpoint)
+    lh = Lakehouse("demo")
 
     try:
         # ── 1. Append Mode ───────────────────────────────────────────────
@@ -247,7 +250,7 @@ async def run_demo():
     finally:
         print("\n  Shutting down...")
         lh.close()
-        await stop_lakehouse(stack)
+        await server.stop()
         print("  Done.")
 
 

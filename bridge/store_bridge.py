@@ -51,12 +51,45 @@ class StoreBridge:
     One DynamicTableWriter per registered Storable type. Events arrive
     via SubscriptionListener (PG LISTEN/NOTIFY) and are dispatched to
     the appropriate writer after optional Expr filtering.
+
+    Usage::
+
+        # Via alias (registered by StoreServer)
+        bridge = StoreBridge("demo", user="alice", password="pw")
+
+        # Explicit params (backward compat)
+        bridge = StoreBridge(host="/tmp/pg", port=5432, dbname="postgres",
+                             user="alice", password="pw")
     """
 
-    def __init__(self, host, port, dbname, user, password,
+    def __init__(self, alias_or_host=None, port=None, dbname=None,
+                 user=None, password=None, *,
+                 host=None,
                  subscriber_id="deephaven_bridge"):
-        self._conn_params = dict(host=host, port=port, dbname=dbname,
-                                 user=user, password=password)
+        # Resolve alias vs explicit params
+        if alias_or_host is not None and port is None and host is None:
+            # Looks like an alias — try to resolve
+            from store.connection import _resolve_alias
+            resolved = _resolve_alias(alias_or_host)
+            if resolved is not None:
+                self._conn_params = dict(
+                    host=resolved["host"], port=resolved["port"],
+                    dbname=resolved.get("dbname", "postgres"),
+                    user=user, password=password,
+                )
+            else:
+                # Treat as explicit host (backward compat)
+                self._conn_params = dict(
+                    host=alias_or_host, port=port or 5432,
+                    dbname=dbname or "postgres",
+                    user=user, password=password,
+                )
+        else:
+            self._conn_params = dict(
+                host=host or alias_or_host, port=port or 5432,
+                dbname=dbname or "postgres",
+                user=user, password=password,
+            )
         self._subscriber_id = subscriber_id
         self._registrations: Dict[str, _Registration] = {}  # type_name → reg
         self._bus = EventBus()

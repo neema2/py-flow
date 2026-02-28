@@ -30,48 +30,32 @@ import threading
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# ── 1. Start Deephaven server (must happen before DH imports) ─────────────
+# ── 1. Start streaming server (must happen before DH imports) ──────────
 print("=" * 64)
-print("  Starting Deephaven server...")
-from deephaven_server import Server
+print("  Starting streaming server...")
+from streaming.admin import StreamingServer
 
-dh = Server(
-    port=10000,
-    jvm_args=[
-        "-Xmx1g",
-        "-Dprocess.info.system-info.enabled=false",
-        "-DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler",
-    ],
-    default_jvm_args=[
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=100",
-        "-XX:+UseStringDeduplication",
-    ],
-)
-dh.start()
-print("  Deephaven server started on http://localhost:10000")
+streaming = StreamingServer(port=10000)
+streaming.start()
+streaming.register_alias("demo")
+print(f"  Streaming server started on {streaming.url}")
 
 # Now safe to import DH modules
 from deephaven.execution_context import get_exec_ctx
 
-# ── 2. Start embedded PostgreSQL (store server) ──────────────────────────
-print("  Starting embedded PostgreSQL...")
-from store.server import ObjectStoreServer
-from store.schema import provision_user
-from store.connection import connect
-from store.base import Storable
+# ── 2. Start store server ───────────────────────────────────────────
+print("  Starting store server...")
+from store.admin import StoreServer
+from store import connect, Storable
 from dataclasses import dataclass
 
 tmp_dir = tempfile.mkdtemp(prefix="demo_bridge_")
-store = ObjectStoreServer(data_dir=tmp_dir, admin_password="demo_pw")
+store = StoreServer(data_dir=tmp_dir, admin_password="demo_pw")
 store.start()
+store.register_alias("demo")
+store.provision_user("demo_user", "demo_pw")
 conn_info = store.conn_info()
-print(f"  PostgreSQL started at {conn_info['host']}:{conn_info['port']}")
-
-# Provision a demo user
-admin = store.admin_conn()
-provision_user(admin, "demo_user", "demo_pw")
-admin.close()
+print(f"  Store server started at {conn_info['host']}:{conn_info['port']}")
 
 # ── 3. Define domain models ──────────────────────────────────────────────
 
@@ -95,8 +79,7 @@ print("  Wiring StoreBridge...")
 from bridge import StoreBridge
 
 bridge = StoreBridge(
-    host=conn_info["host"], port=conn_info["port"], dbname=conn_info["dbname"],
-    user="demo_user", password="demo_pw",
+    "demo", user="demo_user", password="demo_pw",
     subscriber_id="demo_bridge",
 )
 bridge.register(Order)
@@ -251,10 +234,7 @@ _md_thread.start()
 
 # ── 6. Write objects in a loop using live prices ─────────────────────────────
 
-db = connect(
-    host=conn_info["host"], port=conn_info["port"], dbname=conn_info["dbname"],
-    user="demo_user", password="demo_pw",
-)
+db = connect("demo", user="demo_user", password="demo_pw")
 
 try:
     tick = 0

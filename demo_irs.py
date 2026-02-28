@@ -39,30 +39,19 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# ── 1. Start Deephaven server ──────────────────────────────────────────────
+# ── 1. Start streaming server ──────────────────────────────────────────────
 print("=" * 70)
 print("  Interest Rate Swap — Reactive Ticking Demo")
 print("=" * 70)
 print()
-print("  Starting Deephaven server...")
+print("  Starting streaming server...")
 
-from deephaven_server import Server
+from streaming.admin import StreamingServer
 
-dh = Server(
-    port=10000,
-    jvm_args=[
-        "-Xmx1g",
-        "-Dprocess.info.system-info.enabled=false",
-        "-DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler",
-    ],
-    default_jvm_args=[
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=100",
-        "-XX:+UseStringDeduplication",
-    ],
-)
-dh.start()
-print("  Deephaven started on http://localhost:10000")
+streaming = StreamingServer(port=10000)
+streaming.start()
+streaming.register_alias("demo")
+print(f"  Streaming server started on {streaming.url}")
 
 from deephaven.execution_context import get_exec_ctx
 from deephaven import agg

@@ -18,7 +18,8 @@ def pg_server():
     from store.server import ObjectStoreServer
     from store.schema import provision_user
 
-    server = ObjectStoreServer(data_dir="data/test_media_store")
+    import tempfile
+    server = ObjectStoreServer(data_dir=tempfile.mkdtemp(prefix="test_media_store_"))
     server.start()
 
     admin_conn = server.admin_conn()
@@ -34,14 +35,17 @@ def minio_manager():
     """Start MinIO for S3 storage."""
     from lakehouse.services import MinIOManager
 
+    import tempfile
     minio = MinIOManager(
-        data_dir="data/test_media_minio",
+        data_dir=tempfile.mkdtemp(prefix="test_media_minio_"),
         api_port=9012,
         console_port=9013,
     )
-    asyncio.get_event_loop().run_until_complete(minio.start())
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(minio.start())
     yield minio
-    asyncio.get_event_loop().run_until_complete(minio.stop())
+    loop.run_until_complete(minio.stop())
+    loop.close()
 
 
 @pytest.fixture(scope="session")

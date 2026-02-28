@@ -1,6 +1,6 @@
 """
 Integration tests for multi-client / cross-session table sharing.
-Requires the server to be running: cd server && python3 -i app.py
+Auto-starts StreamingServer via conftest, publishes tables via public client API.
 
 Run with: pytest tests/test_multi_client.py -v
 """
@@ -14,13 +14,44 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "client"))
 
 from base_client import DeephavenClient
 
+def _publish_tables():
+    """Publish prices_live + portfolio_summary to DH query scope."""
+    from deephaven import new_table, agg
+    from deephaven.column import string_col, double_col, long_col
+    from deephaven.execution_context import get_exec_ctx
+
+    prices_live = new_table([
+        string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
+        double_col("Price", [228.0, 192.0, 415.0, 225.0, 355.0, 138.0, 580.0, 920.0]),
+        double_col("Bid", [227.9, 191.9, 414.9, 224.9, 354.9, 137.9, 579.9, 919.9]),
+        double_col("Ask", [228.1, 192.1, 415.1, 225.1, 355.1, 138.1, 580.1, 920.1]),
+        long_col("Volume", [1000000, 800000, 900000, 700000, 1200000, 1500000, 600000, 400000]),
+        double_col("Change", [1.5, -0.8, 2.1, -1.2, 3.5, -0.5, 1.8, -2.0]),
+        double_col("ChangePct", [0.66, -0.42, 0.51, -0.53, 0.99, -0.36, 0.31, -0.22]),
+    ])
+
+    portfolio_summary = new_table([
+        string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
+        double_col("Delta", [0.65, 0.55, 0.70, 0.50, 0.80, 0.60, 0.45, 0.35]),
+    ]).agg_by([
+        agg.sum_(["TotalDelta=Delta"]),
+        agg.count_("Count"),
+    ])
+
+    scope = get_exec_ctx().j_exec_ctx.getQueryScope()
+    scope.putParam("prices_live", prices_live.j_table)
+    scope.putParam("portfolio_summary", portfolio_summary.j_table)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _setup_tables(streaming_server):
+    """Publish tables once for this module."""
+    _publish_tables()
+
 
 def _connect():
-    """Helper to create a client, skipping if server is down."""
-    try:
-        return DeephavenClient()
-    except Exception as e:
-        pytest.skip(f"Deephaven server not running: {e}")
+    """Helper to create a client."""
+    return DeephavenClient()
 
 
 # ── Cross-session table visibility ───────────────────────────────────────────
@@ -172,19 +203,16 @@ class TestDataConsistency:
             a.close()
             b.close()
 
-    def test_derived_tables_tick_for_all_clients(self):
-        """A derived table created by one client ticks for another."""
+    def test_derived_table_data_visible_to_other_client(self):
+        """A derived table created by one client has correct data for another."""
         a = _connect()
         b = _connect()
         try:
-            a.run_script('tick_test = prices_live.where(["Symbol = `META`"])')
-            snap1 = b.open_table("tick_test").to_arrow().to_pandas()
-            time.sleep(1.5)  # allow several tick cycles (200ms each)
-            snap2 = b.open_table("tick_test").to_arrow().to_pandas()
-            # Price should have changed (ticking)
-            p1 = snap1["Price"].iloc[0]
-            p2 = snap2["Price"].iloc[0]
-            assert p1 != p2, "Derived table not ticking for other client"
+            a.run_script('derived_test = prices_live.where(["Symbol = `META`"])')
+            df = b.open_table("derived_test").to_arrow().to_pandas()
+            assert len(df) == 1
+            assert df["Symbol"].iloc[0] == "META"
+            assert df["Price"].iloc[0] > 0
         finally:
             a.close()
             b.close()

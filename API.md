@@ -1,6 +1,57 @@
 # Functional API Reference
 
-Complete public API organized by feature area — **31 symbols** across 8 packages.
+Complete public API organized by feature area — **45 symbols** across 10 packages.
+
+---
+
+## 0. Platform (Admin)
+
+**Start and manage infrastructure services.** Every server follows `start()` / `stop()` / `register_alias()`.
+
+| Symbol | Package | Wraps | User API |
+|--------|---------|-------|----------|
+| `StoreServer` | `store.admin` | Embedded PG + RLS + pgvector | `connect("alias")` |
+| `WorkflowServer` | `workflow.admin` | Embedded PG + DBOS | `create_engine("alias")` |
+| `StreamingServer` | `streaming.admin` | Deephaven JVM | `DeephavenClient()` |
+| `MarketDataServer` | `marketdata.admin` | FastAPI + uvicorn + QuestDB | REST / WS |
+| `TsdbServer` | `timeseries.admin` | QuestDB binary | `Timeseries("alias")` |
+| `MediaServer` | `media.admin` | MinIO S3 | `MediaStore("alias")` |
+| `LakehouseServer` | `lakehouse.admin` | Lakekeeper + MinIO + PG | `Lakehouse("alias")` |
+
+### Common interface
+
+```python
+from store.admin import StoreServer
+
+srv = StoreServer(data_dir="data/myapp", admin_password="secret")
+srv.start()
+srv.register_alias("demo")
+srv.provision_user("alice", "alice_pw")  # StoreServer-specific
+# ...
+srv.stop()
+```
+
+### Constructor signatures
+
+| Server | Key params |
+|--------|-----------|
+| `StoreServer(data_dir, admin_password)` | PG data dir, admin password |
+| `WorkflowServer(data_dir, admin_password)` | Own PG instance (decoupled from store) |
+| `StreamingServer(port=10000, max_heap="4g")` | DH JVM port and heap size |
+| `MarketDataServer(port=8000, host="0.0.0.0")` | FastAPI server port |
+| `TsdbServer(data_dir, http_port, ilp_port, pg_port)` | QuestDB ports |
+| `MediaServer(data_dir, api_port=9002, console_port=9003)` | MinIO ports |
+| `LakehouseServer(data_dir)` | Wraps Lakekeeper + MinIO + PG |
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `.port` | Server port (where applicable) |
+| `.url` | Server URL (where applicable) |
+| `.conn_info()` | PG connection dict (StoreServer, WorkflowServer) |
+| `.admin_conn()` | Admin PG connection (StoreServer) |
+| `.pg_url()` | SQLAlchemy connection string (StoreServer, WorkflowServer) |
 
 ---
 
@@ -556,12 +607,15 @@ See [TIMESERIES.md](TIMESERIES.md) for full details.
 
 | Package | Symbols | Count |
 |---------|---------|-------|
+| **platform** | `StoreServer`, `WorkflowServer`, `StreamingServer`, `MarketDataServer`, `TsdbServer`, `MediaServer`, `LakehouseServer` | 7 |
 | **store** | `Storable`, `connect`, `StateMachine`, `Transition`, `EventListener`, `ChangeEvent`, `VersionConflict`, `InvalidTransition`, `GuardFailure`, `TransitionNotPermitted` | 10 |
 | **reactive** | `computed`, `effect` | 2 |
-| **workflow** | `WorkflowEngine`, `WorkflowStatus` | 2 |
+| **workflow** | `WorkflowEngine`, `WorkflowStatus`, `create_engine` | 3 |
+| **streaming** | `StreamingServer` (also in platform) | — |
 | **bridge** | `StoreBridge` | 1 |
 | **lakehouse** | `Lakehouse` | 1 |
 | **media** | `MediaStore`, `Document` | 2 |
 | **ai** | `AI`, `Message`, `LLMResponse`, `ToolCall`, `RAGResult`, `ExtractionResult`, `Tool` | 7 |
-| **timeseries** | `TSDBBackend`, `TSDBConsumer`, `create_backend`, `Bar`, `HistoryQuery`, `BarQuery` | 6 |
-| **Total** | | **31** |
+| **timeseries** | `TSDBBackend`, `TSDBConsumer`, `Timeseries`, `create_backend`, `Bar`, `HistoryQuery`, `BarQuery` | 7 |
+| **client** | `DeephavenClient` | 1 |
+| **Total** | | **41** |

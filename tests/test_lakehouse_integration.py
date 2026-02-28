@@ -21,6 +21,7 @@ Run:
 
 import asyncio
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -78,7 +79,9 @@ def server():
 def stack():
     """Start the lakehouse stack (Lakekeeper PG + Lakekeeper + MinIO)."""
     from lakehouse.admin import start_lakehouse, stop_lakehouse
-    s = asyncio.run(start_lakehouse(data_dir="data/test_lakehouse"))
+    # Use /tmp to keep Unix socket path < 103 bytes (macOS limit)
+    tmp_dir = tempfile.mkdtemp(prefix="tst_lh_", dir="/tmp")
+    s = asyncio.run(start_lakehouse(data_dir=tmp_dir))
     yield s
     asyncio.run(stop_lakehouse(s))
 
@@ -137,9 +140,10 @@ def pg_conn(server):
 def tsdb():
     """Start a TSDBBackend via the public factory (real QuestDB)."""
     from timeseries import create_backend
+    tmp_dir = tempfile.mkdtemp(prefix="test_lakehouse_questdb_")
     backend = create_backend(
         "questdb",
-        data_dir="data/test_lakehouse_questdb",
+        data_dir=tmp_dir,
         http_port=19000,
         ilp_port=19009,
         pg_port=18812,
@@ -232,6 +236,12 @@ def iceberg_tables(catalog):
     return ensure_tables(catalog)
 
 
+@pytest.fixture(scope="module")
+def sync_state_path():
+    """Fresh sync state file per test run — prevents stale watermarks."""
+    return os.path.join(tempfile.mkdtemp(prefix="test_lh_sync_"), "state.json")
+
+
 # ── Test Classes ────────────────────────────────────────────────────────────
 
 
@@ -251,12 +261,12 @@ class TestLakehouseRoundTrip:
         """All 4 Iceberg tables should exist."""
         assert set(iceberg_tables.keys()) == {"events", "ticks", "bars_daily", "positions"}
 
-    def test_sync_events_from_pg(self, catalog, pg_conn, iceberg_tables, seeded):
+    def test_sync_events_from_pg(self, catalog, pg_conn, iceberg_tables, seeded, sync_state_path):
         """Sync PG object_events → Iceberg events table."""
         from lakehouse.admin import SyncEngine
         sync = SyncEngine(
             catalog=catalog,
-            state_path="data/test_lakehouse_sync_state.json",
+            state_path=sync_state_path,
         )
 
         count = sync.sync_events(pg_conn)
@@ -335,12 +345,12 @@ class TestLakehouseRoundTrip:
         finally:
             lq.close()
 
-    def test_incremental_sync(self, db, catalog, pg_conn, iceberg_tables, seeded):
+    def test_incremental_sync(self, db, catalog, pg_conn, iceberg_tables, seeded, sync_state_path):
         """Second sync picks up only newly saved Storable objects."""
         from lakehouse.admin import SyncEngine
         sync = SyncEngine(
             catalog=catalog,
-            state_path="data/test_lakehouse_sync_state.json",
+            state_path=sync_state_path,
         )
 
         # First: no new events since last sync
@@ -405,12 +415,12 @@ class TestLakehouseRoundTrip:
         finally:
             lq.close()
 
-    def test_sync_ticks(self, catalog, tsdb, iceberg_tables, seeded_ticks):
+    def test_sync_ticks(self, catalog, tsdb, iceberg_tables, seeded_ticks, sync_state_path):
         """Sync TSDBBackend ticks → Iceberg ticks table."""
         from lakehouse.admin import SyncEngine
         sync = SyncEngine(
             catalog=catalog,
-            state_path="data/test_lakehouse_sync_state.json",
+            state_path=sync_state_path,
         )
 
         count = sync.sync_ticks(tsdb)

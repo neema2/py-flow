@@ -64,6 +64,7 @@ media = [
     "pymupdf>=1.24.0",
     "beautifulsoup4>=4.12.0",
     "pgvector>=0.3.0",
+    "httpx>=0.27.0",
 ]
 ai = [
     "google-genai>=1.0",
@@ -84,7 +85,7 @@ Repository = "https://github.com/neema2/py-flow"
 Issues = "https://github.com/neema2/py-flow/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["store", "reactive", "bridge", "workflow", "marketdata", "timeseries", "lakehouse", "media", "ai"]
+packages = ["store", "reactive", "bridge", "workflow", "marketdata", "timeseries", "lakehouse", "media", "ai", "streaming"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

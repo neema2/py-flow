@@ -41,7 +41,11 @@ class MediaStore:
 
         from media import MediaStore
 
-        ms = MediaStore(s3_endpoint="localhost:9002")
+        # Connect via alias (registered by MediaServer)
+        ms = MediaStore("demo", ai=ai)
+
+        # Or auto-start (dev convenience)
+        ms = MediaStore(data_dir="data/media", ai=ai)
 
         # Upload
         doc = ms.upload("reports/q1.pdf", title="Q1 Report", tags=["research"])
@@ -57,28 +61,85 @@ class MediaStore:
 
     def __init__(
         self,
-        s3_endpoint: str = "localhost:9002",
-        s3_access_key: str = "minioadmin",
-        s3_secret_key: str = "minioadmin",
-        s3_bucket: str = "media",
-        s3_secure: bool = False,
+        alias_or_endpoint: str | None = None,
+        *,
         ai=None,
         embedding_provider=None,
+        data_dir: str | None = None,
+        # Private — backward compat / tests
+        _s3_endpoint: str | None = None,
+        _s3_access_key: str | None = None,
+        _s3_secret_key: str | None = None,
+        _s3_bucket: str | None = None,
+        _s3_secure: bool = False,
+        # Legacy positional compat
+        s3_endpoint: str | None = None,
+        s3_access_key: str | None = None,
+        s3_secret_key: str | None = None,
+        s3_bucket: str | None = None,
+        s3_secure: bool = False,
     ):
+        self._auto_server = None  # MediaServer we auto-started
+
+        # Resolve connection info
+        endpoint, access_key, secret_key, bucket = self._resolve_connection(
+            alias_or_endpoint, data_dir,
+            _s3_endpoint or s3_endpoint,
+            _s3_access_key or s3_access_key,
+            _s3_secret_key or s3_secret_key,
+            _s3_bucket or s3_bucket,
+        )
+
         self._s3 = S3Client(
-            endpoint=s3_endpoint,
-            access_key=s3_access_key,
-            secret_key=s3_secret_key,
-            bucket=s3_bucket,
-            secure=s3_secure,
+            endpoint=endpoint,
+            access_key=access_key,
+            secret_key=secret_key,
+            bucket=bucket,
+            secure=_s3_secure or s3_secure,
         )
         self._s3.ensure_bucket()
-        self._bucket = s3_bucket
+        self._bucket = bucket
         # ai= is the public API; embedding_provider= is internal/backward-compat
         if ai is not None:
             self._embedder = ai.embedder
         else:
             self._embedder = embedding_provider
+
+    def _resolve_connection(self, alias_or_endpoint, data_dir,
+                            s3_endpoint, s3_access_key, s3_secret_key, s3_bucket):
+        """Resolve S3 connection info from alias, data_dir, or explicit params."""
+        # 1. Try alias
+        if alias_or_endpoint is not None:
+            from media._registry import resolve_alias
+            resolved = resolve_alias(alias_or_endpoint)
+            if resolved is not None:
+                return (resolved["endpoint"], resolved["access_key"],
+                        resolved["secret_key"], resolved["bucket"])
+            # Not an alias — treat as explicit endpoint (backward compat)
+            return (
+                alias_or_endpoint,
+                s3_access_key or "minioadmin",
+                s3_secret_key or "minioadmin",
+                s3_bucket or "media",
+            )
+
+        # 2. Auto-start from data_dir
+        if data_dir is not None:
+            import asyncio
+            from media.admin import MediaServer
+            server = MediaServer(data_dir=data_dir)
+            asyncio.get_event_loop().run_until_complete(server.start())
+            self._auto_server = server
+            return (server.endpoint, server.access_key,
+                    server.secret_key, server.bucket)
+
+        # 3. Explicit S3 params (backward compat / tests)
+        return (
+            s3_endpoint or "localhost:9002",
+            s3_access_key or "minioadmin",
+            s3_secret_key or "minioadmin",
+            s3_bucket or "media",
+        )
 
     # ── Upload ────────────────────────────────────────────────────────────
 
@@ -425,5 +486,12 @@ class MediaStore:
                            doc._store_entity_id, e)
 
     def close(self) -> None:
-        """Clean up resources."""
+        """Clean up resources. Stops auto-started MediaServer if any."""
+        if self._auto_server is not None:
+            import asyncio
+            try:
+                asyncio.get_event_loop().run_until_complete(self._auto_server.stop())
+            except Exception:
+                pass
+            self._auto_server = None
         logger.info("MediaStore closed")

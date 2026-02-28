@@ -50,6 +50,9 @@ class _CompleteBackend(TSDBBackend):
     async def flush(self) -> None:
         self.flushed = True
 
+    def get_all_ticks(self, msg_type, since=None):
+        return []
+
     def get_ticks(self, msg_type, symbol, start, end, limit=1000):
         return []
 

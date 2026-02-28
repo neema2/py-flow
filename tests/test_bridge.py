@@ -22,26 +22,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-# ── Start Deephaven server (must happen before DH imports) ────────────────
-from deephaven_server import Server
-
-_dh_server = Server(
-    port=10011,
-    jvm_args=[
-        "-Xmx512m",
-        "-Dprocess.info.system-info.enabled=false",
-        "-DAuthHandlers=io.deephaven.auth.AnonymousAuthenticationHandler",
-    ],
-    # Override defaults to avoid GCLockerRetryAllocationCount (unsupported on Java 25)
-    default_jvm_args=[
-        "-XX:+UseG1GC",
-        "-XX:MaxGCPauseMillis=100",
-        "-XX:+UseStringDeduplication",
-    ],
-)
-_dh_server.start()
-
-# Now safe to import DH modules
+# DH JVM is started by conftest.py before test collection — safe to import.
 import deephaven.dtypes as dht
 from deephaven import DynamicTableWriter
 from deephaven import pandas as dhpd

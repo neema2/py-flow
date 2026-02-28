@@ -1,6 +1,6 @@
 """
 Integration tests for client operations against the Deephaven server.
-Requires the server to be running: cd server && python3 -i app.py
+Auto-starts StreamingServer and publishes demo tables.
 
 Run with: pytest tests/test_client_ops.py -v
 """
@@ -13,13 +13,42 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "client"))
 
 from base_client import DeephavenClient
 
+# Script to publish minimal demo tables for testing
+_SETUP_SCRIPT = """
+from deephaven import new_table
+from deephaven.column import string_col, double_col, long_col
+
+prices_live = new_table([
+    string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
+    double_col("Price", [228.0, 192.0, 415.0, 225.0, 355.0, 138.0, 580.0, 920.0]),
+    double_col("Bid", [227.9, 191.9, 414.9, 224.9, 354.9, 137.9, 579.9, 919.9]),
+    double_col("Ask", [228.1, 192.1, 415.1, 225.1, 355.1, 138.1, 580.1, 920.1]),
+    long_col("Volume", [1000000, 800000, 900000, 700000, 1200000, 1500000, 600000, 400000]),
+    double_col("Change", [1.5, -0.8, 2.1, -1.2, 3.5, -0.5, 1.8, -2.0]),
+    double_col("ChangePct", [0.66, -0.42, 0.51, -0.53, 0.99, -0.36, 0.31, -0.22]),
+])
+
+risk_live = new_table([
+    string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
+    double_col("Delta", [0.65, 0.55, 0.70, 0.50, 0.80, 0.60, 0.45, 0.35]),
+    double_col("Gamma", [0.03, 0.04, 0.02, 0.05, 0.06, 0.03, 0.04, 0.05]),
+    double_col("Theta", [-0.15, -0.12, -0.18, -0.10, -0.22, -0.14, -0.11, -0.09]),
+    double_col("Vega", [0.25, 0.30, 0.20, 0.35, 0.40, 0.28, 0.32, 0.38]),
+])
+
+from deephaven import agg
+portfolio_summary = risk_live.agg_by([
+    agg.sum_(["TotalDelta=Delta", "TotalGamma=Gamma"]),
+    agg.count_("Count"),
+])
+"""
+
 
 @pytest.fixture(scope="module")
-def client():
-    try:
-        c = DeephavenClient()
-    except Exception as e:
-        pytest.skip(f"Deephaven server not running: {e}")
+def client(streaming_server):
+    """Connect to the session-scoped StreamingServer and publish demo tables."""
+    c = DeephavenClient()
+    c.run_script(_SETUP_SCRIPT)
     yield c
     c.close()
 
@@ -35,24 +64,17 @@ class TestConnection:
         assert client.host == "localhost"
         assert client.port == 10000
 
-    def test_context_manager_connect_and_close(self):
-        try:
-            with DeephavenClient() as c:
-                assert c.session.is_alive
-                tables = c.list_tables()
-                assert len(tables) > 0
-        except Exception as e:
-            pytest.skip(f"Deephaven server not running: {e}")
+    def test_context_manager_connect_and_close(self, streaming_server):
+        with DeephavenClient() as c:
+            assert c.session.is_alive
+            tables = c.list_tables()
+            assert len(tables) > 0
 
-    def test_close_is_idempotent(self):
+    def test_close_is_idempotent(self, streaming_server):
         """Closing twice should not raise."""
-        try:
-            c = DeephavenClient()
-            c.close()
-            # Second close should not raise
-            c.close()
-        except Exception as e:
-            pytest.skip(f"Deephaven server not running: {e}")
+        c = DeephavenClient()
+        c.close()
+        c.close()
 
 
 # ── list_tables ──────────────────────────────────────────────────────────────

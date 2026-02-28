@@ -42,7 +42,12 @@ class Lakehouse:
 
         from lakehouse import Lakehouse
 
-        lh = Lakehouse()
+        # Via alias (registered by LakehouseServer)
+        lh = Lakehouse("demo")
+
+        # Or explicit params (backward compat)
+        lh = Lakehouse(catalog_uri="http://localhost:8181/catalog")
+
         lh.query("SELECT * FROM lakehouse.default.events LIMIT 10")
         lh.ingest("my_signals", df, mode="append")
         lh.transform("daily_pnl", "SELECT ... GROUP BY ...", mode="snapshot")
@@ -51,22 +56,42 @@ class Lakehouse:
 
     def __init__(
         self,
-        catalog_uri: str | None = None,
+        alias_or_catalog: str | None = None,
+        *,
         warehouse: str | None = None,
         s3_endpoint: str | None = None,
         s3_access_key: str | None = None,
         s3_secret_key: str | None = None,
         s3_region: str | None = None,
         namespace: str = "default",
+        # Legacy positional compat
+        catalog_uri: str | None = None,
     ):
-        self._catalog_uri = catalog_uri or os.environ.get("LAKEKEEPER_URI", DEFAULT_CATALOG_URI)
-        self._warehouse = warehouse or os.environ.get("LAKEHOUSE_WAREHOUSE", DEFAULT_WAREHOUSE)
-        self._s3_endpoint = s3_endpoint or os.environ.get("MINIO_ENDPOINT", DEFAULT_S3_ENDPOINT)
-        self._s3_access_key = s3_access_key or os.environ.get("MINIO_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
-        self._s3_secret_key = s3_secret_key or os.environ.get("MINIO_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
-        self._s3_region = s3_region or os.environ.get("MINIO_REGION", DEFAULT_S3_REGION)
-        self._namespace = namespace
+        # Resolve alias
+        resolved = self._resolve(alias_or_catalog, catalog_uri)
+
+        self._catalog_uri = resolved.get("catalog_url") or os.environ.get("LAKEKEEPER_URI", DEFAULT_CATALOG_URI)
+        self._warehouse = warehouse or resolved.get("warehouse") or os.environ.get("LAKEHOUSE_WAREHOUSE", DEFAULT_WAREHOUSE)
+        self._s3_endpoint = s3_endpoint or resolved.get("s3_endpoint") or os.environ.get("MINIO_ENDPOINT", DEFAULT_S3_ENDPOINT)
+        self._s3_access_key = s3_access_key or resolved.get("s3_access_key") or os.environ.get("MINIO_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
+        self._s3_secret_key = s3_secret_key or resolved.get("s3_secret_key") or os.environ.get("MINIO_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
+        self._s3_region = s3_region or resolved.get("s3_region") or os.environ.get("MINIO_REGION", DEFAULT_S3_REGION)
+        self._namespace = namespace or resolved.get("namespace", "default")
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
+
+    @staticmethod
+    def _resolve(alias_or_catalog, catalog_uri) -> dict:
+        """Resolve alias or explicit params."""
+        if alias_or_catalog is not None:
+            from lakehouse._registry import resolve_alias
+            resolved = resolve_alias(alias_or_catalog)
+            if resolved is not None:
+                return resolved
+            # Not an alias — treat as explicit catalog_uri
+            return {"catalog_url": alias_or_catalog}
+        if catalog_uri is not None:
+            return {"catalog_url": catalog_uri}
+        return {}
 
     # ── DuckDB connection (reads + writes) ────────────────────────────────
 

@@ -13,18 +13,18 @@ import pytest
 from dataclasses import dataclass
 
 from store.base import Storable
-from store.server import ObjectStoreServer
+from store.server import StoreServer
 from store.client import StoreClient
 from store.schema import provision_user
 from workflow.engine import WorkflowEngine, WorkflowHandle, WorkflowStatus
-from workflow.dbos_engine import DBOSEngine
+from workflow.factory import create_engine
 
 
 # ---------------------------------------------------------------------------
 # Module-level references (used by workflow functions via closures)
 # ---------------------------------------------------------------------------
 
-_engine: DBOSEngine = None
+_engine: WorkflowEngine = None
 _client: StoreClient = None
 
 
@@ -35,7 +35,7 @@ _client: StoreClient = None
 @pytest.fixture(scope="module")
 def server():
     tmp_dir = tempfile.mkdtemp(prefix="test_workflow_")
-    srv = ObjectStoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
+    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
     srv.start()
     yield srv
     srv.stop()
@@ -44,8 +44,7 @@ def server():
 @pytest.fixture(scope="module")
 def engine(server):
     global _engine
-    url = server.dbos_url()
-    eng = DBOSEngine(url, name="test-workflow")
+    eng = create_engine(server.pg_url(), name="test-workflow")
     eng.launch()
     _engine = eng
     yield eng

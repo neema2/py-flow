@@ -1,6 +1,7 @@
 """
 Integration tests for Deephaven server tables.
-Requires the server to be running: cd server && python3 -i app.py
+Auto-starts StreamingServer via conftest, publishes ticking tables
+using the DH Python API directly (same process as JVM).
 
 Run with: pytest tests/test_server_tables.py -v
 """
@@ -8,21 +9,111 @@ Run with: pytest tests/test_server_tables.py -v
 import sys
 import os
 import time
+import random
+import threading
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "client"))
 
 from base_client import DeephavenClient
 
+# Constants
+_SYMBOLS = ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"]
+_PRICES = {"AAPL": 228.0, "GOOGL": 192.0, "MSFT": 415.0, "AMZN": 225.0,
+           "TSLA": 355.0, "NVDA": 138.0, "META": 580.0, "NFLX": 920.0}
+
+_ticker_stop = threading.Event()
+
+
+def _publish_tables():
+    """Create DynamicTableWriters, derive all 7 tables, start background ticker.
+
+    Called after JVM is running. Publishes tables to the DH query scope
+    so pydeephaven clients can see them.
+    """
+    from deephaven import DynamicTableWriter, agg
+    from deephaven.execution_context import get_exec_ctx
+    import deephaven.dtypes as dht
+
+    # ── Price writer ──
+    pw = DynamicTableWriter({
+        "Symbol": dht.string, "Price": dht.double, "Bid": dht.double,
+        "Ask": dht.double, "Volume": dht.int64, "Change": dht.double,
+        "ChangePct": dht.double,
+    })
+    prices_raw = pw.table
+
+    # ── Risk writer ──
+    rw = DynamicTableWriter({
+        "Symbol": dht.string, "Price": dht.double,
+        "Position": dht.int64, "MarketValue": dht.double,
+        "UnrealizedPnL": dht.double, "Delta": dht.double,
+        "Gamma": dht.double, "Theta": dht.double, "Vega": dht.double,
+    })
+    risk_raw = rw.table
+
+    # ── Derived tables ──
+    prices_live = prices_raw.last_by("Symbol")
+    risk_live = risk_raw.last_by("Symbol")
+    portfolio_summary = risk_live.agg_by([
+        agg.sum_(["TotalMV=MarketValue", "TotalPnL=UnrealizedPnL", "TotalDelta=Delta"]),
+        agg.avg(["AvgGamma=Gamma", "AvgTheta=Theta", "AvgVega=Vega"]),
+        agg.count_("NumPositions"),
+    ])
+    top_movers = prices_live.sort_descending("ChangePct")
+    volume_leaders = prices_live.sort_descending("Volume")
+
+    # ── Publish to DH query scope (visible to pydeephaven clients) ──
+    scope = get_exec_ctx().j_exec_ctx.getQueryScope()
+    for name, tbl in [
+        ("prices_raw", prices_raw), ("prices_live", prices_live),
+        ("risk_raw", risk_raw), ("risk_live", risk_live),
+        ("portfolio_summary", portfolio_summary),
+        ("top_movers", top_movers), ("volume_leaders", volume_leaders),
+    ]:
+        scope.putParam(name, tbl.j_table)
+
+    # ── Seed initial rows ──
+    def _write_tick():
+        for sym in _SYMBOLS:
+            p = _PRICES[sym] + random.uniform(-1, 1)
+            c = random.uniform(-2, 2)
+            pw.write_row(sym, p, p - 0.1, p + 0.1,
+                         int(500000 + random.random() * 1e6), c, c / p * 100)
+            pos = random.randint(100, 1000)
+            rw.write_row(sym, p, pos, p * pos, c * pos,
+                         0.5 + random.random() * 0.3, 0.02 + random.random() * 0.04,
+                         -0.1 - random.random() * 0.15, 0.2 + random.random() * 0.2)
+
+    _write_tick()
+
+    # Flush the update graph so derived tables reflect initial rows
+    get_exec_ctx().update_graph.j_update_graph.requestRefresh()
+    time.sleep(0.3)
+
+    # ── Background ticker: feed new rows so tables tick ──
+    _ticker_stop.clear()
+
+    def _ticker():
+        while not _ticker_stop.is_set():
+            time.sleep(0.2)
+            try:
+                _write_tick()
+            except Exception:
+                return
+
+    t = threading.Thread(target=_ticker, daemon=True, name="test-ticker")
+    t.start()
+
 
 @pytest.fixture(scope="module")
-def client():
-    """Single client connection reused across all tests in this module."""
-    try:
-        c = DeephavenClient()
-    except Exception as e:
-        pytest.skip(f"Deephaven server not running: {e}")
+def client(streaming_server):
+    """Publish all 7 trading tables, then connect a pydeephaven client."""
+    _publish_tables()
+    time.sleep(0.5)  # let a few ticks accumulate
+    c = DeephavenClient()
     yield c
+    _ticker_stop.set()
     c.close()
 
 

@@ -35,14 +35,19 @@ class QuestDBBackend(TSDBBackend):
 
     def __init__(
         self,
-        data_dir: str = "data/questdb",
+        data_dir: str | None = None,
         host: str = "localhost",
-        http_port: int = 9000,
-        ilp_port: int = 9009,
-        pg_port: int = 8812,
+        http_port: int | None = None,
+        ilp_port: int | None = None,
+        pg_port: int | None = None,
         ttl_days: int = 90,
         auto_start: bool = True,
     ):
+        import os
+        data_dir = data_dir or os.environ.get("QUESTDB_DATA_DIR", "data/questdb")
+        http_port = http_port or int(os.environ.get("QUESTDB_HTTP_PORT", "9000"))
+        ilp_port = ilp_port or int(os.environ.get("QUESTDB_ILP_PORT", "9009"))
+        pg_port = pg_port or int(os.environ.get("QUESTDB_PG_PORT", "8812"))
         self._manager = QuestDBManager(
             data_dir=data_dir,
             host=host,

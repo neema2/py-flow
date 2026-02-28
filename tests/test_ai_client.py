@@ -84,7 +84,8 @@ def pg_server():
     from store.schema import provision_user
     from media.models import bootstrap_search_schema, bootstrap_chunks_schema
 
-    server = ObjectStoreServer(data_dir="data/test_ai_client")
+    import tempfile
+    server = ObjectStoreServer(data_dir=tempfile.mkdtemp(prefix="test_ai_client_"))
     server.start()
 
     conn = server.admin_conn()
@@ -106,7 +107,8 @@ def pg_server():
 @pytest.fixture(scope="module")
 def minio_manager():
     from lakehouse.services import MinIOManager
-    minio = MinIOManager(data_dir="data/test_ai_client_minio", api_port=9052, console_port=9053)
+    import tempfile
+    minio = MinIOManager(data_dir=tempfile.mkdtemp(prefix="test_ai_client_minio_"), api_port=9052, console_port=9053)
     loop = asyncio.new_event_loop()
     loop.run_until_complete(minio.start())
     yield minio

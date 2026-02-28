@@ -2,60 +2,79 @@
 
 A governance-first reactive platform backed by **PostgreSQL** with **[Deephaven.io](https://deephaven.io)** for real-time streaming — featuring a **bi-temporal event-sourced object store**, a **reactive expression language** that compiles to Python, SQL, and Legend Pure, and **durable workflow orchestration** with zero external infrastructure.
 
+Every service follows the same pattern: **`XxxServer`** (platform/admin) → **`connect()` / `Xxx()`** (user code). Implementation details (PG, MinIO, QuestDB, Deephaven JVM, uvicorn) are hidden.
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  OBJECT STORE  (store/)                                      │
-│  Embedded PG • RLS • Bi-temporal event sourcing • Append-only│
-│  connect() → pos.save() → Position.find() — Active Record   │
-│                                                              │
-│  ┌─────────────────┐  ┌──────────────┐  ┌────────────────┐  │
-│  │ Column Registry  │  │State Machines│  │   Permissions  │  │
-│  │ Enforced schema  │  │ 3-tier hooks │  │ RLS + sharing  │  │
-│  │ AI/OLAP metadata │  │ guard/action │  │ owner/readers  │  │
-│  └─────────────────┘  └──────────────┘  └────────────────┘  │
-└──────────────────────┬───────────────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────────────┐
-│  REACTIVE LAYER  (reactive/)                                 │
-│  Expression tree → Python eval / PG SQL / Legend Pure         │
-│  @computed + @effect: pure OO reactivity on Storable objects  │
-└──────────────────────┬───────────────────────────────────────┘
-                       │
-          ┌────────────┼────────────────┐
-    ┌─────▼────┐ ┌─────▼─────┐  ┌──────▼─────┐
-    │ Workflow  │ │   Store   │  │ Deephaven  │
-    │  Engine   │ │  Bridge   │  │  Bridge    │
-    │ (DBOS)    │ │ auto-save │  │ PG→DH tick │
-    └──────────┘ └───────────┘  └────▲───────┘
-                                     │ gRPC
-┌────────────────────────────────────▼─────────────────────────┐
-│  DEEPHAVEN SERVER  (server/)                    Port 10000   │
-│  Embedded JVM • DynamicTableWriter • Web IDE • Market sim    │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        PLATFORM (admin)                          │
+│                                                                  │
+│  ┌─────────┐ ┌──────────┐ ┌───────┐ ┌─────────┐ ┌───────────┐  │
+│  │  Store   │ │ Workflow │ │ Media │ │Lakehouse│ │ Timeseries│  │
+│  │ Server   │ │  Server  │ │Server │ │ Server  │ │  Server   │  │
+│  └────┬─────┘ └────┬─────┘ └───┬───┘ └────┬────┘ └─────┬─────┘  │
+│       │            │           │          │            │          │
+│  ┌────┴─────┐ ┌────┴─────┐ ┌──┴───┐ ┌────┴────┐ ┌─────┴─────┐  │
+│  │Embedded  │ │Embedded  │ │MinIO │ │Lakekeeper│ │  QuestDB  │  │
+│  │PG + RLS  │ │PG + DBOS │ │  S3  │ │+MinIO+PG│ │  binary   │  │
+│  └──────────┘ └──────────┘ └──────┘ └─────────┘ └───────────┘  │
+│                                                                  │
+│  ┌────────────┐  ┌───────────────┐                               │
+│  │ Streaming  │  │  Market Data  │                               │
+│  │  Server    │  │    Server     │                               │
+│  └─────┬──────┘  └──────┬────────┘                               │
+│        │                │                                        │
+│  ┌─────┴──────┐  ┌──────┴────────┐                               │
+│  │ Deephaven  │  │FastAPI+uvicorn│                               │
+│  │    JVM     │  │  +simulator   │                               │
+│  └────────────┘  └───────────────┘                               │
+│                                                                  │
+│  Each: start() / stop() / register_alias("demo")                │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │ alias
+┌────────────────────────────▼─────────────────────────────────────┐
+│                         USER CODE                                │
+│                                                                  │
+│  connect("demo")         ─── Object store (Storable API)         │
+│  create_engine("demo")   ─── Workflow orchestration              │
+│  MediaStore("demo", ai=) ─── Upload, search, RAG                │
+│  Lakehouse("demo")       ─── Iceberg SQL via DuckDB              │
+│  Timeseries("demo")      ─── Historical tick read/write          │
+│  StoreBridge("demo")     ─── PG events → DH ticking tables      │
+│  DeephavenClient()       ─── Ticking table queries               │
+└────────────────────────────┬─────────────────────────────────────┘
+                             │
+┌────────────────────────────▼─────────────────────────────────────┐
+│                     REACTIVE LAYER                               │
+│                                                                  │
+│  @computed + @effect   ─── pure OO reactivity on Storable objects│
+│  Expression tree       ─── compiles to Python / SQL / Legend Pure│
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-**675+ tests** across 15+ test suites. Zero external dependencies beyond Python + PostgreSQL.
+**942 tests**, zero skips, zero failures. All services auto-start in the test harness.
 
 ---
 
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Object Store](#object-store) — bi-temporal, event-sourced, RLS-secured
-3. [Column Registry](#column-registry) — enforced schema governance with AI metadata
-4. [State Machines](#state-machines) — declarative lifecycle with three-tier side-effects
-5. [Reactive Expressions](#reactive-expressions) — one AST, three compilation targets
-6. [Reactive Properties](#reactive-properties) — @computed, @effect, cross-entity aggregation
-7. [Workflow Engine](#workflow-engine) — durable orchestration with checkpointed steps
-8. [Event Subscriptions](#event-subscriptions) — in-process bus + cross-process PG NOTIFY
-9. [Deephaven Bridge](#deephaven-bridge) — stream store events into ticking tables
-10. [Deephaven Server & Clients](#deephaven-server--clients) — real-time market data
-11. [Market Data Server](#market-data-server) — real-time WebSocket + REST
-12. [Historical Time-Series](#historical-time-series) — QuestDB tick archive
-13. [Lakehouse](#lakehouse) — Iceberg analytical store
-14. [AI](#ai) — embeddings, LLM, RAG, extraction, tool calling
-15. [Project Structure](#project-structure)
-16. [Demos](#demos)
+2. [Platform Architecture](#platform-architecture) — XxxServer admin + alias-based user APIs
+3. [Object Store](#object-store) — bi-temporal, event-sourced, RLS-secured
+4. [Column Registry](#column-registry) — enforced schema governance with AI metadata
+5. [State Machines](#state-machines) — declarative lifecycle with three-tier side-effects
+6. [Reactive Expressions](#reactive-expressions) — one AST, three compilation targets
+7. [Reactive Properties](#reactive-properties) — @computed, @effect, cross-entity aggregation
+8. [Workflow Engine](#workflow-engine) — durable orchestration with checkpointed steps
+9. [Event Subscriptions](#event-subscriptions) — in-process bus + cross-process PG NOTIFY
+10. [Deephaven Bridge](#deephaven-bridge) — stream store events into ticking tables
+11. [Streaming & Clients](#streaming--clients) — real-time ticking tables
+12. [Market Data Server](#market-data-server) — real-time WebSocket + REST
+13. [Historical Time-Series](#historical-time-series) — QuestDB tick archive
+14. [Lakehouse](#lakehouse) — Iceberg analytical store
+15. [Media Store](#media-store) — unstructured data storage & search
+16. [AI](#ai) — embeddings, LLM, RAG, extraction, tool calling
+17. [Project Structure](#project-structure)
+18. [Demos](#demos)
 
 ---
 
@@ -108,6 +127,45 @@ pos.save()                   # UPDATED event (version 2)
 found = Position.find(pos._store_entity_id)
 pos.share("bob")             # RLS: bob can now read this position
 ```
+
+---
+
+## Platform Architecture
+
+Every infrastructure service follows the same three-step pattern:
+
+### 1. Admin starts a server
+
+```python
+from store.admin import StoreServer
+
+store = StoreServer(data_dir="data/myapp")
+store.start()
+store.register_alias("demo")          # publish under a name
+store.provision_user("alice", "pw")   # create a user
+```
+
+### 2. Users connect by alias
+
+```python
+from store import connect
+
+db = connect("demo", user="alice", password="pw")
+```
+
+### 3. All 7 servers follow this pattern
+
+| Server | Package | Starts | User API |
+|--------|---------|--------|----------|
+| `StoreServer` | `store.admin` | Embedded PG + RLS + pgvector | `connect("alias")` |
+| `WorkflowServer` | `workflow.admin` | Embedded PG + DBOS | `create_engine("alias")` |
+| `StreamingServer` | `streaming.admin` | Deephaven JVM | `DeephavenClient()` |
+| `MarketDataServer` | `marketdata.admin` | FastAPI + simulator + QuestDB | REST / WebSocket |
+| `TsdbServer` | `timeseries.admin` | QuestDB binary | `Timeseries("alias")` |
+| `MediaServer` | `media.admin` | MinIO S3 | `MediaStore("alias", ai=)` |
+| `LakehouseServer` | `lakehouse.admin` | Lakekeeper + MinIO + PG | `Lakehouse("alias")` |
+
+Each `XxxServer` has `start()`, `stop()`, and `register_alias()`. Users never see the implementation — no PG connection strings, no MinIO credentials, no JVM args.
 
 ---
 
@@ -592,48 +650,40 @@ orders_live = orders_raw.last_by("EntityId")   # latest state per entity
 
 ---
 
-## Deephaven Server & Clients
+## Streaming & Clients
 
-### Server
+### Start the streaming server
 
-```bash
-pip install -r requirements-server.txt
-cd server && python3 -i app.py
+```python
+from streaming.admin import StreamingServer
+
+streaming = StreamingServer(port=10000)
+streaming.start()
 # Web IDE at http://localhost:10000
 ```
 
-### Clients
+### Connect from client code
 
-```bash
-pip install -r requirements-client.txt
-cd client
-python3 quant_client.py      # Watchlists, top movers, volume leaders
-python3 risk_client.py       # Large exposures, risk scoring
-python3 pm_client.py         # P&L snapshots, position sizing
+```python
+from base_client import DeephavenClient
+
+with DeephavenClient() as client:
+    tables = client.list_tables()
+    df = client.open_table("prices_live").to_arrow().to_pandas()
+    client.run_script('filtered = prices_live.where(["Symbol = `AAPL`"])')
 ```
 
 Clients connect via `pydeephaven` (lightweight — **no Java needed** on client machines).
-
-### Published Tables
-
-| Table | Description |
-|-------|-------------|
-| `prices_raw` | Append-only price ticks |
-| `prices_live` | Latest price per symbol (ticking) |
-| `risk_raw` | Append-only risk ticks |
-| `risk_live` | Latest risk per symbol (ticking) |
-| `portfolio_summary` | Aggregated portfolio metrics |
 
 ### Client Capabilities
 
 | Feature | How |
 |---------|-----|
-| Read shared tables | `session.open_table("prices_live")` |
-| Filter / sort | `table.where(...)`, `table.sort(...)` |
-| Create server-side views | `session.run_script("...")` |
-| Publish tables | `session.bind_table(name, table)` |
+| Read shared tables | `client.open_table("prices_live")` |
+| List all tables | `client.list_tables()` |
+| Run server-side scripts | `client.run_script("...")` |
 | Export to pandas | `table.to_arrow().to_pandas()` |
-| Subscribe to ticks | `pydeephaven-ticking` listener API |
+| Filter / sort | DH table operations via `run_script` |
 
 ---
 
@@ -641,9 +691,11 @@ Clients connect via `pydeephaven` (lightweight — **no Java needed** on client 
 
 Real-time market data hub — WebSocket streaming + REST snapshots via FastAPI. See [MARKETDATA.md](MARKETDATA.md) for full docs.
 
-```bash
-pip install -e ".[marketdata]"
-python -m marketdata.server
+```python
+from marketdata.admin import MarketDataServer
+
+md = MarketDataServer(port=8000)
+await md.start()
 # REST: http://localhost:8000/md/snapshot
 # WS:   ws://localhost:8000/md/subscribe
 ```
@@ -767,96 +819,105 @@ response = ai.run_tool_loop("Find Basel III docs", tools=ai.search_tools(ms))
 
 ```
 py-flow/
-├── server/
-│   ├── app.py              # Deephaven server + data engine
-│   ├── market_data.py      # Market data simulation
-│   ├── risk_engine.py      # Black-Scholes Greeks calculator
-│   └── start_server.sh     # Launch script
-├── client/
-│   ├── base_client.py      # Reusable connection helper
-│   ├── quant_client.py     # Quant: filtered views, derived tables
-│   ├── risk_client.py      # Risk: exposure monitoring, alerts
-│   └── pm_client.py        # PM: portfolio summary, P&L snapshots
 ├── store/
+│   ├── admin.py            # StoreServer (alias: ObjectStoreServer)
 │   ├── base.py             # Storable base class + bi-temporal metadata
+│   ├── client.py           # StoreClient (event-sourced, bi-temporal)
+│   ├── connection.py       # connect() + alias registry
+│   ├── server.py           # Embedded PG bootstrap (used by admin.py)
+│   ├── schema.py           # DDL: object_events table + RLS policies
 │   ├── registry.py         # ColumnDef, ColumnRegistry, RegistryError
 │   ├── columns/            # Column catalog (49 columns)
-│   │   ├── __init__.py     # REGISTRY global instance
-│   │   ├── trading.py      # symbol, price, quantity, side, pnl, ...
-│   │   ├── finance.py      # bid, ask, strike, volatility, notional, ...
-│   │   ├── general.py      # name, label, title, status, weight, ...
-│   │   └── media.py        # filename, content_type, size, s3_key, ...
-│   ├── models.py           # Domain models: Trade, Order, Signal
-│   ├── server.py           # Embedded PG server bootstrap
-│   ├── client.py           # StoreClient (event-sourced, bi-temporal)
-│   ├── schema.py           # DDL: object_events table + RLS policies
 │   ├── state_machine.py    # StateMachine + 3-tier Transitions
 │   ├── permissions.py      # Share/unshare entities between users
-│   └── subscriptions.py    # EventListener + EventBus + SubscriptionListener
+│   └── subscriptions.py    # EventListener + EventBus
 ├── reactive/
 │   ├── expr.py             # Expression tree (eval / to_sql / to_pure)
-│   ├── computed.py         # @computed + @effect decorators, AST→Expr parser
+│   ├── computed.py         # @computed + @effect decorators
 │   └── bridge.py           # Auto-persist effect factory
 ├── workflow/
+│   ├── admin.py            # WorkflowServer (own PG, decoupled)
 │   ├── engine.py           # WorkflowEngine ABC + durable_transition()
-│   ├── dbos_engine.py      # DBOS-backed implementation (hidden)
-│   └── dispatcher.py       # Legacy helper (absorbed into engine)
+│   ├── factory.py          # create_engine("alias") factory
+│   └── dbos_engine.py      # DBOS-backed implementation (hidden)
+├── streaming/
+│   ├── admin.py            # StreamingServer (Deephaven JVM)
+│   └── _registry.py        # Alias registry
 ├── bridge/
 │   ├── store_bridge.py     # StoreBridge: PG NOTIFY → DH ticking tables
 │   └── type_mapping.py     # @dataclass → DH schema + row extraction
 ├── marketdata/
-│   ├── server.py           # FastAPI — REST + WebSocket + TSDB endpoints
-│   ├── bus.py              # TickBus — async pub/sub for market data
+│   ├── admin.py            # MarketDataServer (FastAPI + uvicorn)
+│   ├── server.py           # FastAPI app — REST + WebSocket + TSDB
+│   ├── bus.py              # TickBus — async pub/sub
 │   ├── models.py           # Tick, FXTick, CurveTick, Subscription
 │   └── feeds/simulator.py  # SimulatorFeed — GBM equities + FX
 ├── timeseries/
+│   ├── admin.py            # TsdbServer (QuestDB lifecycle)
 │   ├── base.py             # TSDBBackend ABC
-│   ├── factory.py          # create_backend() — selects backend by env
+│   ├── factory.py          # create_backend() — selects by env
 │   ├── consumer.py         # TSDBConsumer — TickBus → TSDB writer
 │   ├── models.py           # Bar, HistoryQuery, BarQuery
 │   └── backends/questdb/   # QuestDB: manager, writer (ILP), reader (PGWire)
 ├── lakehouse/
-│   ├── catalog.py          # PyIceberg REST catalog via Lakekeeper
-│   ├── tables.py           # Iceberg table defs: events, ticks, bars_daily, positions
+│   ├── admin.py            # LakehouseServer (Lakekeeper + MinIO + PG)
+│   ├── catalog.py          # PyIceberg REST catalog
+│   ├── query.py            # Lakehouse class: query, ingest, transform
 │   ├── sync.py             # Incremental ETL: PG + QuestDB → Iceberg
-│   ├── query.py            # Lakehouse class: query, ingest, transform (DuckDB SQL)
-│   ├── services.py         # Lakekeeper + MinIO binary lifecycle
+│   ├── services.py         # Binary lifecycle managers
 │   └── models.py           # SyncState, TableInfo
 ├── media/
-│   ├── store.py            # MediaStore: upload, download, search, list, delete
-│   ├── models.py           # Document Storable + document_search schema (RLS)
-│   ├── chunking.py         # Sentence-aware text chunking with overlap
+│   ├── admin.py            # MediaServer (MinIO lifecycle)
+│   ├── store.py            # MediaStore: upload, download, search
+│   ├── models.py           # Document Storable + search schema
+│   ├── chunking.py         # Sentence-aware text chunking
 │   ├── extraction.py       # Text extraction: PDF, text, markdown, HTML
-│   └── s3.py               # S3Client wrapper (MinIO upload/download)
+│   └── _minio.py           # MinIO management (hidden)
 ├── ai/
 │   ├── __init__.py         # 7 public symbols: AI, Message, LLMResponse, ...
-│   ├── client.py           # AI class — single user-facing entry point
+│   ├── client.py           # AI class — single entry point
 │   └── _*.py               # Private: embeddings, LLM, RAG, tools, extraction
+├── client/
+│   ├── base_client.py      # DeephavenClient wrapper (pydeephaven)
+│   ├── quant_client.py     # Watchlists, top movers, volume leaders
+│   ├── risk_client.py      # Exposure monitoring, risk scoring
+│   └── pm_client.py        # Portfolio summary, P&L snapshots
+├── server/
+│   └── app.py              # Legacy standalone DH server (demo)
 ├── tests/
-│   ├── test_store.py       # Bi-temporal + state machine + RLS + 3-tier (134)
-│   ├── test_reactive.py    # Expr + @computed + @effect + overrides (159)
-│   ├── test_marketdata.py  # Multi-asset bus, WS, REST snapshots (59)
-│   ├── test_timeseries.py  # TSDB ABC, factory, consumer routing (unit)
-│   ├── test_timeseries_integration.py  # MemoryBackend round-trip (integration)
-│   ├── test_questdb_integration.py     # QuestDB ILP+PGWire (real DB)
-│   ├── test_lakehouse.py   # Schemas, Arrow conversion, sync state (34)
-│   ├── test_media.py       # Extraction, content types, Document model (41)
-│   ├── test_media_integration.py  # Upload, search, download (18)
-│   └── ...                 # 15+ test suites total
+│   ├── conftest.py         # Session fixtures: StreamingServer + MarketDataServer
+│   ├── test_store.py       # Bi-temporal + state machine + RLS (134)
+│   ├── test_reactive.py    # Expr + @computed + @effect (159)
+│   ├── test_bridge.py      # StoreBridge PG → DH round-trip (14)
+│   ├── test_server_tables.py  # DH table publishing + ticking (21)
+│   ├── test_multi_client.py   # Cross-session table visibility (10)
+│   ├── test_client_ops.py     # Client run_script + table ops (20)
+│   ├── test_workflow.py       # Durable workflows + steps (16)
+│   ├── test_marketdata.py     # Multi-asset bus, WS, REST (59)
+│   ├── test_questdb_integration.py  # QuestDB + MarketDataServer (10+)
+│   ├── test_lakehouse.py             # Schemas, sync state (34)
+│   ├── test_lakehouse_integration.py # Full round-trip PG → Iceberg → DuckDB (10)
+│   ├── test_media.py                 # Extraction, Document model (41)
+│   ├── test_media_integration.py     # Upload, search, download (18)
+│   ├── test_vector_search.py         # pgvector cosine search (12)
+│   ├── test_embed_upload.py          # Embed + upload + semantic search (12)
+│   ├── test_ai_client.py             # AI generation, RAG, tools (11)
+│   └── ...                           # 942 tests total, 0 skips
 ├── demo_irs.py             # IRS reactive grid → DH ticking tables
 ├── demo_bridge.py          # Store + @computed → DH ticking tables
+├── demo_trading.py         # Trading server: prices + risk → DH tables
 ├── demo_backtest.py        # TSDB tick collection + MA crossover backtest
-├── demo_lakehouse.py       # Iceberg lakehouse end-to-end demo
+├── demo_lakehouse.py       # Iceberg lakehouse end-to-end
 ├── demo_lakehouse_ingest.py  # Lakehouse ingest/transform all 4 modes
 ├── demo_media.py           # Media store: upload, extract, search
 ├── demo_rag.py             # AI + RAG: upload, search, ask, extract, tools
 ├── demo_three_tiers.py     # Three-tier state machine side-effects
-├── API.md                  # Functional API reference (31 symbols)
-├── AI.md                   # AI architecture: embeddings, LLM, RAG, extraction
-├── REACTIVE.md             # Reactive properties design document
-├── TIMESERIES.md           # Time-series architecture docs
-├── LAKEHOUSE.md            # Lakehouse architecture docs
-├── MEDIA.md               # Media store architecture docs
+├── API.md                  # Functional API reference
+├── AI.md                   # AI architecture docs
+├── REACTIVE.md             # Reactive properties design
+├── TIMESERIES.md           # Time-series architecture
+├── LAKEHOUSE.md            # Lakehouse architecture
+├── MEDIA.md                # Media store architecture
 └── README.md
 ```
 

@@ -34,7 +34,7 @@ host    all       all            ::1/128        scram-sha-256
 """
 
 
-class ObjectStoreServer:
+class StoreServer:
     """Manages an embedded PostgreSQL instance with zero-trust RLS config."""
 
     def __init__(self, data_dir=None, admin_password=None):
@@ -211,17 +211,21 @@ class ObjectStoreServer:
             "dbname": dbname,
         }
 
-    def dbos_url(self):
-        """Return a SQLAlchemy connection string for the workflow engine.
-
-        Uses psycopg3 driver and Unix socket path compatible with DBOS.
-        """
+    def pg_url(self):
+        """Return a generic postgres:// connection URL for this server."""
         info = self.conn_info()
         host_encoded = urllib.parse.quote(info["host"], safe="")
         return (
-            f"postgresql+psycopg://{ADMIN_ROLE}:{self.admin_password}@"
-            f":{info['port']}/{info['dbname']}?host={host_encoded}"
+            f"postgresql://{ADMIN_ROLE}:{self.admin_password}@"
+            f"localhost:{info['port']}/{info['dbname']}?host={host_encoded}"
         )
+
+    def provision_user(self, username: str, password: str):
+        """Create a user with RLS access. Idempotent."""
+        from store.schema import provision_user as _provision
+        admin_conn = self.admin_conn()
+        _provision(admin_conn, username, password)
+        admin_conn.close()
 
     def stop(self):
         """Stop the embedded PostgreSQL server."""
@@ -235,3 +239,7 @@ class ObjectStoreServer:
 
     def __exit__(self, *args):
         self.stop()
+
+
+# Deprecated alias — use StoreServer instead
+ObjectStoreServer = StoreServer

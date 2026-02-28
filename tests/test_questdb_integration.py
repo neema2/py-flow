@@ -40,10 +40,11 @@ class TestQuestDBBackendRoundTrip:
     """Write ticks via ILP, read them back via PGWire. The real pipeline."""
 
     @pytest.fixture(scope="class")
-    def backend(self):
+    def backend(self, tmp_path_factory):
+        tmp_dir = str(tmp_path_factory.mktemp("test_questdb"))
         b = create_backend(
             "questdb",
-            data_dir="data/test_questdb",
+            data_dir=tmp_dir,
             http_port=19100,
             ilp_port=19109,
             pg_port=18912,
@@ -168,34 +169,21 @@ class TestQuestDBBackendRoundTrip:
 
 # ── Server REST → QuestDB Round-Trip ─────────────────────────────────────────
 
+
 class TestServerQuestDBRoundTrip:
     """Full server integration: SimulatorFeed ticks → QuestDB → REST query.
 
-    Requires the market data server running with QuestDB:
-      python -m marketdata.server
+    Uses the session-scoped market_data_server from conftest.py.
     """
 
-    @pytest.fixture
-    def server_url(self):
-        """Check server is reachable, skip if not."""
-        import httpx
-        try:
-            resp = httpx.get("http://localhost:8000/md/health", timeout=3)
-            if resp.status_code != 200:
-                pytest.skip("Market data server not running")
-            # Check TSDB is available (not 503)
-            resp2 = httpx.get("http://localhost:8000/md/latest/equity", timeout=3)
-            if resp2.status_code == 503:
-                pytest.skip("TSDB not enabled on market data server")
-        except Exception:
-            pytest.skip("Market data server not reachable")
-        return "http://localhost:8000"
+    @pytest.fixture(scope="class")
+    def server_url(self, market_data_server):
+        """Get the URL from the session-scoped market data server."""
+        return market_data_server.url
 
     def test_history_has_real_ticks(self, server_url):
         """GET /md/history/equity/AAPL returns real ticks from QuestDB."""
         import httpx
-        # Simulator ticks at 200ms, give it a moment
-        time.sleep(2)
         resp = httpx.get(f"{server_url}/md/history/equity/AAPL", params={"limit": 10}, timeout=5)
         assert resp.status_code == 200
         ticks = resp.json()
@@ -207,7 +195,6 @@ class TestServerQuestDBRoundTrip:
     def test_bars_have_ohlcv(self, server_url):
         """GET /md/bars/equity/AAPL returns real OHLCV bars."""
         import httpx
-        time.sleep(2)
         resp = httpx.get(f"{server_url}/md/bars/equity/AAPL", params={"interval": "5s"}, timeout=5)
         assert resp.status_code == 200
         bars = resp.json()
@@ -222,7 +209,6 @@ class TestServerQuestDBRoundTrip:
     def test_fx_ticks_stored(self, server_url):
         """FX ticks from simulator are stored in QuestDB."""
         import httpx
-        time.sleep(2)
         resp = httpx.get(f"{server_url}/md/history/fx/EUR/USD", params={"limit": 5}, timeout=5)
         assert resp.status_code == 200
         ticks = resp.json()
@@ -233,12 +219,10 @@ class TestServerQuestDBRoundTrip:
     def test_latest_all_equity_symbols(self, server_url):
         """LATEST ON returns one row per equity symbol."""
         import httpx
-        time.sleep(2)
         resp = httpx.get(f"{server_url}/md/latest/equity", timeout=5)
         assert resp.status_code == 200
         data = resp.json()
         symbols = {row["symbol"] for row in data}
-        # Simulator produces 8 equity symbols
         assert len(symbols) >= 8, f"Expected 8 equity symbols, got {symbols}"
         for expected in ("AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"):
             assert expected in symbols
@@ -246,7 +230,6 @@ class TestServerQuestDBRoundTrip:
     def test_multiple_intervals(self, server_url):
         """Different bar intervals produce different bar counts."""
         import httpx
-        time.sleep(3)
         resp_5s = httpx.get(f"{server_url}/md/bars/equity/AAPL", params={"interval": "5s"}, timeout=5)
         resp_15s = httpx.get(f"{server_url}/md/bars/equity/AAPL", params={"interval": "15s"}, timeout=5)
         bars_5s = resp_5s.json()

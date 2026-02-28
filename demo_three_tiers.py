@@ -15,12 +15,13 @@ Usage:
 import tempfile
 from dataclasses import dataclass
 
-from store.base import Storable
-from store.server import ObjectStoreServer
-from store.connection import connect
-from store.state_machine import StateMachine, Transition
-from store.schema import provision_user
-from workflow.dbos_engine import DBOSEngine
+# ── Platform imports (admin tier) ────────────────────────────────────────
+from store.admin import StoreServer
+from workflow.admin import WorkflowServer
+from workflow import create_engine
+
+# ── User imports ─────────────────────────────────────────────────────────
+from store import Storable, connect, StateMachine, Transition
 
 
 # ---------------------------------------------------------------------------
@@ -107,27 +108,26 @@ def main():
     print("  Three-Tier State Machine Side-Effects Demo")
     print("=" * 70)
 
-    # Boot embedded PG + DBOS
+    # ── Platform setup ────────────────────────────────────────────────
     tmp_dir = tempfile.mkdtemp(prefix="demo_tiers_")
-    server = ObjectStoreServer(data_dir=tmp_dir, admin_password="admin_pw")
-    server.start()
 
-    engine = DBOSEngine(server.dbos_url(), name="demo-tiers")
+    store = StoreServer(data_dir=f"{tmp_dir}/store", admin_password="admin_pw")
+    store.start()
+    store.register_alias("demo")
+    store.provision_user("trader", "trader_pw")
+
+    wf = WorkflowServer(data_dir=f"{tmp_dir}/workflow")
+    wf.start()
+    wf.register_alias("demo")
+
+    engine = create_engine("demo", name="demo-tiers")
     engine.launch()
 
     # Wire Tier 3
     Order._workflow_engine = engine
 
-    # Create a connection
-    admin_conn = server.admin_conn()
-    provision_user(admin_conn, "trader", "trader_pw")
-    admin_conn.close()
-
-    ci = server.conn_info()
-    db = connect(
-        host=ci["host"], port=ci["port"], dbname=ci["dbname"],
-        user="trader", password="trader_pw",
-    )
+    # ── User code ─────────────────────────────────────────────────────
+    db = connect("demo", user="trader", password="trader_pw")
 
     # ── Demo 1: All three tiers on PENDING → FILLED ──────────────────
     print("\n── Demo 1: Transition PENDING → FILLED ─────────────────────")
@@ -222,7 +222,8 @@ def main():
     # Cleanup
     db.close()
     engine.destroy()
-    server.stop()
+    wf.stop()
+    store.stop()
 
 
 if __name__ == "__main__":

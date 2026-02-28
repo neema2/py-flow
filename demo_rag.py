@@ -48,37 +48,36 @@ def run_demo():
         print("\n  ERROR: Set GEMINI_API_KEY environment variable.")
         return
 
-    # ── Start infrastructure ──────────────────────────────────────────
-    section("Starting MinIO + PG")
+    # ── Platform setup ──────────────────────────────────────────────
+    section("Starting infrastructure")
 
-    from lakehouse.services import MinIOManager
-    from store.server import ObjectStoreServer
-    from store.schema import provision_user
-    from store.connection import connect
+    from store.admin import StoreServer
+    from media.admin import MediaServer
 
-    server = ObjectStoreServer(data_dir="data/demo_rag_store")
-    server.start()
-
-    admin_conn = server.admin_conn()
-    provision_user(admin_conn, "demo_user", "demo_pw")
+    store = StoreServer(data_dir="data/demo_rag_store")
+    store.start()
+    store.register_alias("demo-rag")
+    store.provision_user("demo_user", "demo_pw")
 
     from media.models import bootstrap_search_schema, bootstrap_chunks_schema
+    admin_conn = store.admin_conn()
     bootstrap_search_schema(admin_conn, embedding_dim=768)
     admin_conn.close()
-
-    admin_conn = server.admin_conn()
+    admin_conn = store.admin_conn()
     bootstrap_chunks_schema(admin_conn, embedding_dim=768)
     admin_conn.close()
 
-    minio = MinIOManager(data_dir="data/demo_rag_minio", api_port=9062, console_port=9063)
-    asyncio.run(minio.start())
+    media_srv = MediaServer(data_dir="data/demo_rag_media", api_port=9062, console_port=9063)
+    asyncio.run(media_srv.start())
+    media_srv.register_alias("demo-rag")
 
-    info = server.conn_info()
-    conn = connect(user="demo_user", host=info["host"], port=info["port"],
-                   dbname=info["dbname"], password="demo_pw")
+    # ── User code ──────────────────────────────────────────────────
+    from store import connect
 
+    conn = connect("demo-rag", user="demo_user", password="demo_pw")
+    info = store.conn_info()
     print(f"  PG:    {info['host']}:{info['port']}")
-    print(f"  MinIO: localhost:9062")
+    print(f"  Media: {media_srv.endpoint}")
 
     # ── Create AI + MediaStore ────────────────────────────────────────
     section("Initializing AI + MediaStore")
@@ -87,7 +86,7 @@ def run_demo():
     from media import MediaStore
 
     ai = AI()  # reads GEMINI_API_KEY from env
-    ms = MediaStore(s3_endpoint="localhost:9062", s3_bucket="demo-rag", ai=ai)
+    ms = MediaStore("demo-rag", ai=ai)
 
     print(f"  AI initialized (provider: gemini)")
     print(f"  MediaStore with AI-powered embeddings")
@@ -318,8 +317,8 @@ def run_demo():
         print("\n  Shutting down...")
         ms.close()
         conn.close()
-        asyncio.run(minio.stop())
-        server.stop()
+        asyncio.run(media_srv.stop())
+        store.stop()
         print("  Done.")
 
 
