@@ -692,6 +692,34 @@ All write modes include `_batch_id` and `_batch_ts` for audit. Modes with versio
 
 ---
 
+## Media Store
+
+Unstructured data storage & full-text search — documents, images, audio, video. Binary files in MinIO, metadata as Storable objects in PG with tsvector search. See [MEDIA.md](MEDIA.md) for full docs.
+
+```bash
+pip install -e ".[media]"
+python3 demo_media.py
+```
+
+```python
+from media import MediaStore
+
+ms = MediaStore(s3_endpoint="localhost:9002")
+
+# Upload (PDF, text, markdown, HTML, images, audio, video)
+doc = ms.upload("reports/q1.pdf", title="Q1 Report", tags=["research"])
+
+# Full-text search (PG tsvector with weighted ranking)
+results = ms.search("interest rate swap", tags=["research"])
+
+# Download
+data = ms.download(doc)
+```
+
+Text extraction: PDF (pymupdf), plain text, markdown, HTML. Documents inherit all Storable features — bi-temporal audit trail, RLS access control, event sourcing, Iceberg sync.
+
+---
+
 ## Project Structure
 
 ```
@@ -713,7 +741,8 @@ py-flow/
 │   │   ├── __init__.py     # REGISTRY global instance
 │   │   ├── trading.py      # symbol, price, quantity, side, pnl, ...
 │   │   ├── finance.py      # bid, ask, strike, volatility, notional, ...
-│   │   └── general.py      # name, label, title, status, weight, ...
+│   │   ├── general.py      # name, label, title, status, weight, ...
+│   │   └── media.py        # filename, content_type, size, s3_key, ...
 │   ├── models.py           # Domain models: Trade, Order, Signal
 │   ├── server.py           # Embedded PG server bootstrap
 │   ├── client.py           # StoreClient (event-sourced, bi-temporal)
@@ -750,6 +779,11 @@ py-flow/
 │   ├── query.py            # Lakehouse class: query, ingest, transform (DuckDB SQL)
 │   ├── services.py         # Lakekeeper + MinIO binary lifecycle
 │   └── models.py           # SyncState, TableInfo
+├── media/
+│   ├── store.py            # MediaStore: upload, download, search, list, delete
+│   ├── models.py           # Document Storable + document_search schema (RLS)
+│   ├── extraction.py       # Text extraction: PDF, text, markdown, HTML
+│   └── s3.py               # S3Client wrapper (MinIO upload/download)
 ├── tests/
 │   ├── test_store.py       # Bi-temporal + state machine + RLS + 3-tier (134)
 │   ├── test_reactive.py    # Expr + @computed + @effect + overrides (159)
@@ -758,16 +792,21 @@ py-flow/
 │   ├── test_timeseries_integration.py  # MemoryBackend round-trip (integration)
 │   ├── test_questdb_integration.py     # QuestDB ILP+PGWire (real DB)
 │   ├── test_lakehouse.py   # Schemas, Arrow conversion, sync state (34)
-│   └── ...                 # 13+ test suites total
+│   ├── test_media.py       # Extraction, content types, Document model (41)
+│   ├── test_media_integration.py  # Upload, search, download (18)
+│   └── ...                 # 15+ test suites total
 ├── demo_irs.py             # IRS reactive grid → DH ticking tables
 ├── demo_bridge.py          # Store + @computed → DH ticking tables
 ├── demo_backtest.py        # TSDB tick collection + MA crossover backtest
 ├── demo_lakehouse.py       # Iceberg lakehouse end-to-end demo
+├── demo_lakehouse_ingest.py  # Lakehouse ingest/transform all 4 modes
+├── demo_media.py           # Media store: upload, extract, search
 ├── demo_three_tiers.py     # Three-tier state machine side-effects
 ├── API.md                  # REST API reference
 ├── REACTIVE.md             # Reactive properties design document
 ├── TIMESERIES.md           # Time-series architecture docs
 ├── LAKEHOUSE.md            # Lakehouse architecture docs
+├── MEDIA.md               # Media store architecture docs
 └── README.md
 ```
 

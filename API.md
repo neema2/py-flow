@@ -1,6 +1,6 @@
 # Functional API Reference
 
-Complete public API organized by feature area — **22 symbols** across 6 packages.
+Complete public API organized by feature area — **24 symbols** across 7 packages.
 
 ---
 
@@ -380,7 +380,96 @@ lh.close()
 
 ---
 
-## 9. Time-Series Database
+## 9. Media Store
+
+**Unstructured data storage & full-text search with RLS access control.**
+
+```python
+from media import MediaStore, Document
+```
+
+| Symbol | Kind | Description |
+|--------|------|-------------|
+| `MediaStore` | class | Upload, download, search, list, delete unstructured files. |
+| `Document` | Storable | Metadata model for files stored in S3. Inherits all Storable features. |
+
+### Constructor
+
+```python
+ms = MediaStore(
+    s3_endpoint="localhost:9002",   # MinIO endpoint
+    s3_access_key="minioadmin",     # MinIO access key
+    s3_secret_key="minioadmin",     # MinIO secret key
+    s3_bucket="media",              # S3 bucket name
+)
+```
+
+### Methods
+
+| Method | Signature | Returns | Description |
+|--------|-----------|---------|-------------|
+| `.upload()` | `upload(source, *, filename, title, content_type, tags, metadata, extract)` | `Document` | Upload file, extract text, save metadata. |
+| `.download()` | `download(doc_or_id)` | `bytes` | Download file content from S3. |
+| `.download_to()` | `download_to(doc_or_id, path)` | `Path` | Download to local file. |
+| `.search()` | `search(query, content_type=None, tags=None, limit=50)` | `list[dict]` | Full-text search with weighted ranking. |
+| `.list()` | `list(content_type=None, tags=None, limit=100)` | `list[Document]` | List documents with optional filters. |
+| `.delete()` | `delete(doc_or_id)` | `None` | Soft-delete (Storable semantics). S3 object retained. |
+| `.close()` | `close()` | `None` | Clean up resources. |
+
+**`source`** accepts: file path (`str`/`Path`) or `bytes`.
+
+### Text Extraction
+
+| Content type | Library | Status |
+|-------------|---------|--------|
+| `application/pdf` | pymupdf | ✅ |
+| `text/plain`, `text/csv` | built-in | ✅ |
+| `text/markdown` | built-in (regex) | ✅ |
+| `text/html` | beautifulsoup4 | ✅ |
+| `image/*`, `audio/*`, `video/*` | — | Stored, no extraction (Phase 2) |
+
+### Search Weights
+
+| Weight | Source |
+|--------|--------|
+| **A** (highest) | Title |
+| **B** | Filename + tags |
+| **C** | Extracted text |
+
+### Document Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | `str` | Document title |
+| `filename` | `str` | Original filename |
+| `content_type` | `str` | MIME type |
+| `size` | `int` | File size in bytes |
+| `s3_key` | `str` | S3 object key |
+| `tags` | `list` | Classification tags |
+| `extracted_text` | `str` | Extracted searchable text |
+| `metadata` | `dict` | Arbitrary key-value metadata |
+
+```python
+ms = MediaStore(s3_endpoint="localhost:9002")
+
+# Upload
+doc = ms.upload("report.pdf", title="Q1 Report", tags=["research"])
+
+# Search
+results = ms.search("interest rate swap", content_type="application/pdf")
+
+# Download
+data = ms.download(doc)
+
+# Storable features (inherited)
+history = doc.history()
+doc.share("bob", mode="read")
+ms.close()
+```
+
+---
+
+## 10. Time-Series Database
 
 **Backend-agnostic historical market data storage.**
 
@@ -419,5 +508,6 @@ See [TIMESERIES.md](TIMESERIES.md) for full details.
 | **workflow** | `WorkflowEngine`, `WorkflowStatus` | 2 |
 | **bridge** | `StoreBridge` | 1 |
 | **lakehouse** | `Lakehouse` | 1 |
+| **media** | `MediaStore`, `Document` | 2 |
 | **timeseries** | `TSDBBackend`, `TSDBConsumer`, `create_backend`, `Bar`, `HistoryQuery`, `BarQuery` | 6 |
-| **Total** | | **22** |
+| **Total** | | **24** |

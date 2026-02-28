@@ -13,3 +13,4 @@ REGISTRY = ColumnRegistry()
 from store.columns import general   # noqa: F401, E402
 from store.columns import trading   # noqa: F401, E402
 from store.columns import finance   # noqa: F401, E402
+from store.columns import media     # noqa: F401, E402
