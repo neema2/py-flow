@@ -495,3 +495,95 @@ def semantic_search_documents(conn, query_embedding: list, limit: int = 10) -> l
         columns = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
         return [dict(zip(columns, row)) for row in rows]
+
+
+def hybrid_search_documents(
+    conn,
+    query: str,
+    query_embedding: list,
+    limit: int = 10,
+    k: int = 60,
+    text_weight: float = 1.0,
+    semantic_weight: float = 1.0,
+) -> list[dict]:
+    """
+    Hybrid search combining full-text (tsvector) and semantic (pgvector) results
+    using Reciprocal Rank Fusion (RRF).
+
+    RRF_score(doc) = text_weight / (k + text_rank) + semantic_weight / (k + semantic_rank)
+
+    Args:
+        conn: PG connection.
+        query: Text search query string.
+        query_embedding: Query embedding vector (list[float]).
+        limit: Max results to return (default: 10).
+        k: RRF constant (default: 60). Higher = more even blending.
+        text_weight: Weight for full-text search leg (default: 1.0).
+        semantic_weight: Weight for semantic search leg (default: 1.0).
+
+    Returns:
+        List of dicts with entity_id, title, filename, content_type, tags,
+        chunk_text, rrf_score, text_rank, vector_distance.
+        Sorted by rrf_score descending (best first).
+    """
+    # Fetch candidates from both search legs (2× limit for enough overlap)
+    candidate_limit = limit * 3
+
+    # Full-text search (document-level)
+    text_results = search_documents(conn, query, limit=candidate_limit)
+
+    # Semantic search (chunk-level)
+    semantic_results = semantic_search_documents(conn, query_embedding, limit=candidate_limit)
+
+    # Build RRF scores keyed by entity_id
+    # For text results: use entity_id as key
+    # For semantic results: use entity_id (may have multiple chunks — take best)
+    rrf_scores = {}  # entity_id → {rrf_score, text_rank, vector_distance, metadata}
+
+    # Text leg
+    for rank_idx, result in enumerate(text_results):
+        eid = str(result["entity_id"])
+        rrf_contribution = text_weight / (k + rank_idx + 1)
+        if eid not in rrf_scores:
+            rrf_scores[eid] = {
+                "entity_id": eid,
+                "title": result.get("title", ""),
+                "filename": result.get("filename", ""),
+                "content_type": result.get("content_type", ""),
+                "tags": result.get("tags", []),
+                "chunk_text": "",
+                "rrf_score": 0.0,
+                "text_rank": result.get("rank", 0.0),
+                "vector_distance": None,
+            }
+        rrf_scores[eid]["rrf_score"] += rrf_contribution
+        rrf_scores[eid]["text_rank"] = result.get("rank", 0.0)
+
+    # Semantic leg
+    for rank_idx, result in enumerate(semantic_results):
+        eid = str(result["entity_id"])
+        rrf_contribution = semantic_weight / (k + rank_idx + 1)
+        if eid not in rrf_scores:
+            rrf_scores[eid] = {
+                "entity_id": eid,
+                "title": result.get("title", ""),
+                "filename": result.get("filename", ""),
+                "content_type": result.get("content_type", ""),
+                "tags": result.get("tags", []),
+                "chunk_text": result.get("chunk_text", ""),
+                "rrf_score": 0.0,
+                "text_rank": None,
+                "vector_distance": result.get("distance"),
+            }
+        rrf_scores[eid]["rrf_score"] += rrf_contribution
+        # Keep best (smallest) vector distance and best chunk text
+        if rrf_scores[eid]["vector_distance"] is None or (
+            result.get("distance") is not None
+            and result["distance"] < rrf_scores[eid]["vector_distance"]
+        ):
+            rrf_scores[eid]["vector_distance"] = result.get("distance")
+            rrf_scores[eid]["chunk_text"] = result.get("chunk_text", "")
+
+    # Sort by RRF score descending
+    merged = sorted(rrf_scores.values(), key=lambda x: x["rrf_score"], reverse=True)
+    return merged[:limit]

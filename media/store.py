@@ -23,6 +23,7 @@ from media.models import (
     delete_search_index,
     search_documents,
     semantic_search_documents,
+    hybrid_search_documents,
     upsert_document_chunks,
     update_document_embedding,
 )
@@ -263,6 +264,51 @@ class MediaStore:
         from store.connection import get_connection
         conn = get_connection()
         return semantic_search_documents(conn.conn, query_embedding, limit)
+
+    def hybrid_search(
+        self,
+        query: str,
+        limit: int = 10,
+        k: int = 60,
+        text_weight: float = 1.0,
+        semantic_weight: float = 1.0,
+    ) -> list[dict]:
+        """
+        Hybrid search — combines full-text and semantic search with RRF.
+
+        Reciprocal Rank Fusion merges text search (keyword matching) and
+        semantic search (embedding similarity) for best-of-both-worlds retrieval.
+
+        Args:
+            query: Natural language search query.
+            limit: Max results (default: 10).
+            k: RRF constant (default: 60). Higher = more even blending.
+            text_weight: Weight for text search leg (default: 1.0).
+            semantic_weight: Weight for semantic search leg (default: 1.0).
+
+        Returns:
+            List of dicts with entity_id, title, filename, content_type, tags,
+            chunk_text, rrf_score, text_rank, vector_distance.
+            Sorted by rrf_score descending (best first).
+
+        Raises:
+            ValueError: If no embedding provider is configured.
+        """
+        if not self._embedder:
+            raise ValueError(
+                "hybrid_search requires an embedding_provider. "
+                "Pass embedding_provider= to MediaStore constructor."
+            )
+
+        query_embedding = self._embedder.embed_query(query)
+
+        from store.connection import get_connection
+        conn = get_connection()
+        return hybrid_search_documents(
+            conn.conn, query, query_embedding,
+            limit=limit, k=k,
+            text_weight=text_weight, semantic_weight=semantic_weight,
+        )
 
     # ── List ──────────────────────────────────────────────────────────────
 

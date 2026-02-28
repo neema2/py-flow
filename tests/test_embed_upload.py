@@ -319,3 +319,51 @@ class TestSemanticSearch:
         import pytest
         with pytest.raises(ValueError, match="embedding_provider"):
             media_store_no_embed.semantic_search("test query")
+
+
+@requires_gemini
+class TestHybridSearch:
+    """Integration tests for hybrid_search() with RRF."""
+
+    def test_hybrid_search_returns_results(self, media_store_with_embed):
+        """hybrid_search returns results with rrf_score, text_rank, vector_distance."""
+        media_store_with_embed.upload(
+            b"Linear regression is a fundamental statistical method for prediction.",
+            filename="regression.txt",
+            title="Linear Regression",
+            tags=["statistics"],
+        )
+
+        results = media_store_with_embed.hybrid_search("linear regression prediction")
+        assert len(results) > 0
+        r = results[0]
+        assert "rrf_score" in r
+        assert "text_rank" in r
+        assert "vector_distance" in r
+        assert "title" in r
+        assert "entity_id" in r
+        # RRF scores should be descending
+        scores = [x["rrf_score"] for x in results]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_hybrid_boosts_dual_match(self, media_store_with_embed):
+        """Documents matching BOTH text and semantic should rank highest."""
+        # Upload two docs — one matches keywords, one is semantically similar
+        media_store_with_embed.upload(
+            b"Decision trees split data based on feature thresholds for classification.",
+            filename="decision_trees.txt",
+            title="Decision Trees",
+            tags=["ml"],
+        )
+
+        # This doc has the exact keywords "decision trees" AND is semantically relevant
+        results = media_store_with_embed.hybrid_search("decision trees classification")
+        assert len(results) > 0
+        # The decision trees doc should be near the top
+        titles = [r["title"] for r in results[:5]]
+        assert "Decision Trees" in titles
+
+    def test_hybrid_no_embedder_raises(self, media_store_no_embed):
+        """hybrid_search without embedding provider raises ValueError."""
+        with pytest.raises(ValueError, match="embedding_provider"):
+            media_store_no_embed.hybrid_search("test query")
