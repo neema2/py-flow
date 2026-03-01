@@ -186,7 +186,7 @@ class Lakehouse:
     def ingest(
         self,
         table_name: str,
-        data: Union[pa.Table, list[dict], "pd.DataFrame"],
+        data: Union[pa.Table, list[dict], "pd.DataFrame", str],
         mode: str = "append",
         primary_key: str | None = None,
     ) -> int:
@@ -195,30 +195,110 @@ class Lakehouse:
 
         Args:
             table_name: Target table name (created automatically if missing).
-            data: Data to write — PyArrow Table, list of dicts, or pandas DataFrame.
+            data: Data to write.  Accepts:
+                  - **str**: File pointer (URL/S3/local path) or SQL query.
+                    Data stays in DuckDB — never enters Python memory.
+                  - **PyArrow Table**, **pandas DataFrame**, or **list[dict]**.
             mode: Write mode — "append", "snapshot", "incremental", "bitemporal".
             primary_key: Required for "incremental" and "bitemporal" modes.
 
         Returns:
             Number of rows written.
+
+        Examples::
+
+            # File pointer (zero Python transit)
+            lh.ingest("taxi", "https://host/yellow_tripdata.parquet")
+            lh.ingest("taxi", "s3://bucket/data.parquet")
+
+            # SQL with column selection / renaming
+            lh.ingest("taxi", "SELECT col AS new_name FROM 'url.parquet'")
+
+            # Python objects (existing)
+            lh.ingest("taxi", arrow_table)
+            lh.ingest("taxi", dataframe)
         """
         if mode not in VALID_MODES:
             raise ValueError(f"Invalid mode '{mode}'. Must be one of: {VALID_MODES}")
         if mode in ("incremental", "bitemporal") and not primary_key:
             raise ValueError(f"mode='{mode}' requires a primary_key")
 
+        # ── String source: URL, file path, or SQL ──
+        if isinstance(data, str):
+            return self._ingest_from_sql(table_name, data, mode, primary_key)
+
+        # ── Python object source: Arrow, DataFrame, dicts ──
         arrow_data = _to_arrow(data)
         if len(arrow_data) == 0:
             return 0
 
+        view = f"_ingest_{table_name}_{uuid.uuid4().hex[:8]}"
+        self._register_arrow(view, arrow_data)
+        try:
+            col_names = list(arrow_data.column_names)
+            n = len(arrow_data)
+            return self._write_mode(table_name, view, col_names, n, mode, primary_key)
+        finally:
+            self._unregister(view)
+
+    def _ingest_from_sql(
+        self,
+        table_name: str,
+        source: str,
+        mode: str,
+        primary_key: str | None,
+    ) -> int:
+        """Ingest from a SQL string or file pointer — zero Python transit.
+
+        For append/snapshot (source referenced once): streams directly.
+        For incremental/bitemporal (source referenced twice): materializes
+        into a DuckDB temp table first to avoid re-fetching.
+        """
+        source_sql = source.strip()
+        if not source_sql.upper().startswith("SELECT"):
+            source_sql = f"SELECT * FROM '{source_sql}'"
+
+        # Discover column names from schema (metadata only, no data read)
+        conn = self._ensure_conn()
+        col_names = [
+            row[0] for row in
+            conn.execute(f"DESCRIBE ({source_sql})").fetchall()
+        ]
+
+        if mode in ("append", "snapshot"):
+            # FAST PATH: stream directly from source → Iceberg, no temp table.
+            # Wrap as subquery so it works as a FROM clause.
+            source_ref = f"({source_sql})"
+            n = conn.execute(f"SELECT count(*) FROM {source_ref}").fetchone()[0]
+            return self._write_mode(table_name, source_ref, col_names, n, mode, primary_key)
+        else:
+            # TEMP TABLE: incremental/bitemporal need source referenced twice.
+            staging = f"_staging_{uuid.uuid4().hex[:8]}"
+            try:
+                self._exec(f"CREATE TEMP TABLE {staging} AS {source_sql}")
+                n = conn.execute(f"SELECT count(*) FROM {staging}").fetchone()[0]
+                return self._write_mode(table_name, staging, col_names, n, mode, primary_key)
+            finally:
+                self._exec(f"DROP TABLE IF EXISTS {staging}")
+
+    def _write_mode(
+        self,
+        table_name: str,
+        source_ref: str,
+        col_names: list[str],
+        n: int,
+        mode: str,
+        primary_key: str | None,
+    ) -> int:
+        """Dispatch to the correct write mode."""
         if mode == "append":
-            return self._write_append(table_name, arrow_data)
+            return self._write_append(table_name, source_ref, col_names, n)
         elif mode == "snapshot":
-            return self._write_snapshot(table_name, arrow_data)
+            return self._write_snapshot(table_name, source_ref, col_names, n)
         elif mode == "incremental":
-            return self._write_incremental(table_name, arrow_data, primary_key)
+            return self._write_incremental(table_name, source_ref, col_names, n, primary_key)
         elif mode == "bitemporal":
-            return self._write_bitemporal(table_name, arrow_data, primary_key)
+            return self._write_bitemporal(table_name, source_ref, col_names, n, primary_key)
 
     # ── Transform (SQL → write) ───────────────────────────────────────────
 
@@ -232,9 +312,7 @@ class Lakehouse:
         """
         Run a SQL query and write the results into an Iceberg table.
 
-        This is equivalent to: ingest(table_name, query_arrow(sql), mode, primary_key).
-        The SQL should return the data you want to write — the system handles
-        all versioning metadata automatically.
+        Data stays in DuckDB — no Python round-trip.
 
         Args:
             table_name: Target table name (created automatically if missing).
@@ -245,177 +323,152 @@ class Lakehouse:
         Returns:
             Number of rows written.
         """
-        arrow_data = self.query_arrow(sql)
-        return self.ingest(table_name, arrow_data, mode=mode, primary_key=primary_key)
+        return self.ingest(table_name, sql, mode=mode, primary_key=primary_key)
 
     # ── Write modes (all via DuckDB SQL) ──────────────────────────────────
 
-    def _write_append(self, table_name: str, data: pa.Table) -> int:
+    def _write_append(self, table_name: str, source_ref: str, col_names: list[str], n: int) -> int:
         """Append mode: raw append with _batch_id and _batch_ts only."""
         fqn = self._fqn(table_name)
         batch_id = str(uuid.uuid4())
-        n = len(data)
-        user_cols = ", ".join(data.column_names)
+        user_cols = ", ".join(col_names)
 
-        view = f"_ingest_{table_name}_{uuid.uuid4().hex[:8]}"
-        self._register_arrow(view, data)
-        try:
-            self._ensure_table_from_sql(fqn, f"""
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts
-                FROM {view} WHERE false
-            """)
-            self._exec(f"""
-                INSERT INTO {fqn}
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts
-                FROM {view}
-            """)
-        finally:
-            self._unregister(view)
+        self._ensure_table_from_sql(fqn, f"""
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts
+            FROM {source_ref} WHERE false
+        """)
+        self._exec(f"""
+            INSERT INTO {fqn}
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts
+            FROM {source_ref}
+        """)
         logger.info("Append %s: wrote %d rows to %s", batch_id[:8], n, table_name)
         return n
 
-    def _write_snapshot(self, table_name: str, data: pa.Table) -> int:
+    def _write_snapshot(self, table_name: str, source_ref: str, col_names: list[str], n: int) -> int:
         """Snapshot mode: batch-level versioning with _batch_id, _batch_ts, _is_current."""
         fqn = self._fqn(table_name)
         batch_id = str(uuid.uuid4())
-        n = len(data)
-        user_cols = ", ".join(data.column_names)
+        user_cols = ", ".join(col_names)
 
-        view = f"_ingest_{table_name}_{uuid.uuid4().hex[:8]}"
-        self._register_arrow(view, data)
-        try:
-            self._ensure_table_from_sql(fqn, f"""
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current
-                FROM {view} WHERE false
-            """)
+        self._ensure_table_from_sql(fqn, f"""
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current
+            FROM {source_ref} WHERE false
+        """)
 
-            # Expire previous batch
-            self._exec(f"""
-                UPDATE {fqn} SET _is_current = false
-                WHERE _is_current = true
-            """)
+        # Expire previous batch
+        self._exec(f"""
+            UPDATE {fqn} SET _is_current = false
+            WHERE _is_current = true
+        """)
 
-            # Insert new batch
-            self._exec(f"""
-                INSERT INTO {fqn}
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current
-                FROM {view}
-            """)
-        finally:
-            self._unregister(view)
+        # Insert new batch
+        self._exec(f"""
+            INSERT INTO {fqn}
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current
+            FROM {source_ref}
+        """)
 
         logger.info("Snapshot %s: wrote %d rows to %s", batch_id[:8], n, table_name)
         return n
 
-    def _write_incremental(self, table_name: str, data: pa.Table, primary_key: str) -> int:
+    def _write_incremental(self, table_name: str, source_ref: str, col_names: list[str], n: int, primary_key: str) -> int:
         """Incremental mode: row-level upsert by primary key with soft delete."""
-        if primary_key not in data.column_names:
-            raise ValueError(f"primary_key '{primary_key}' not found in data columns: {data.column_names}")
+        if primary_key not in col_names:
+            raise ValueError(f"primary_key '{primary_key}' not found in data columns: {col_names}")
 
         fqn = self._fqn(table_name)
         batch_id = str(uuid.uuid4())
-        n = len(data)
-        user_cols = ", ".join(data.column_names)
+        user_cols = ", ".join(col_names)
 
-        view = f"_ingest_{table_name}_{uuid.uuid4().hex[:8]}"
-        self._register_arrow(view, data)
-        try:
-            self._ensure_table_from_sql(fqn, f"""
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current,
-                       now() AS _updated_at
-                FROM {view} WHERE false
-            """)
+        self._ensure_table_from_sql(fqn, f"""
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current,
+                   now() AS _updated_at
+            FROM {source_ref} WHERE false
+        """)
 
-            # Expire matching current rows
-            self._exec(f"""
-                UPDATE {fqn}
-                SET _is_current = false, _updated_at = now()
-                WHERE _is_current = true
-                  AND {primary_key} IN (SELECT {primary_key} FROM {view})
-            """)
+        # Expire matching current rows
+        self._exec(f"""
+            UPDATE {fqn}
+            SET _is_current = false, _updated_at = now()
+            WHERE _is_current = true
+              AND {primary_key} IN (SELECT {primary_key} FROM {source_ref})
+        """)
 
-            # Insert new current versions
-            self._exec(f"""
-                INSERT INTO {fqn}
-                SELECT {user_cols},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current,
-                       now() AS _updated_at
-                FROM {view}
-            """)
-        finally:
-            self._unregister(view)
+        # Insert new current versions
+        self._exec(f"""
+            INSERT INTO {fqn}
+            SELECT {user_cols},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current,
+                   now() AS _updated_at
+            FROM {source_ref}
+        """)
 
         logger.info("Incremental %s: upserted %d rows in %s", batch_id[:8], n, table_name)
         return n
 
-    def _write_bitemporal(self, table_name: str, data: pa.Table, primary_key: str) -> int:
+    def _write_bitemporal(self, table_name: str, source_ref: str, col_names: list[str], n: int, primary_key: str) -> int:
         """Bitemporal mode: system time + business time versioning."""
-        if primary_key not in data.column_names:
-            raise ValueError(f"primary_key '{primary_key}' not found in data columns: {data.column_names}")
+        if primary_key not in col_names:
+            raise ValueError(f"primary_key '{primary_key}' not found in data columns: {col_names}")
 
         fqn = self._fqn(table_name)
         batch_id = str(uuid.uuid4())
-        n = len(data)
 
         # Build the valid_from/valid_to expressions — use user columns if present
-        vf_expr = "_valid_from" if "_valid_from" in data.column_names else "now()"
-        vt_expr = "_valid_to" if "_valid_to" in data.column_names else "CAST(NULL AS TIMESTAMPTZ)"
+        vf_expr = "_valid_from" if "_valid_from" in col_names else "now()"
+        vt_expr = "_valid_to" if "_valid_to" in col_names else "CAST(NULL AS TIMESTAMPTZ)"
 
         # Columns to SELECT for INSERT (exclude _valid_from/_valid_to from user_cols if we're adding them)
-        insert_user_cols = [c for c in data.column_names if c not in ("_valid_from", "_valid_to")]
+        insert_user_cols = [c for c in col_names if c not in ("_valid_from", "_valid_to")]
         insert_user_cols_str = ", ".join(insert_user_cols)
 
-        view = f"_ingest_{table_name}_{uuid.uuid4().hex[:8]}"
-        self._register_arrow(view, data)
-        try:
-            self._ensure_table_from_sql(fqn, f"""
-                SELECT {insert_user_cols_str},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current,
-                       now() AS _tx_time,
-                       now() AS _valid_from,
-                       CAST(NULL AS TIMESTAMPTZ) AS _valid_to
-                FROM {view} WHERE false
-            """)
+        self._ensure_table_from_sql(fqn, f"""
+            SELECT {insert_user_cols_str},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current,
+                   now() AS _tx_time,
+                   now() AS _valid_from,
+                   CAST(NULL AS TIMESTAMPTZ) AS _valid_to
+            FROM {source_ref} WHERE false
+        """)
 
-            # Expire matching current rows — close their valid_to window
-            self._exec(f"""
-                UPDATE {fqn}
-                SET _is_current = false, _valid_to = now(), _tx_time = now()
-                WHERE _is_current = true
-                  AND {primary_key} IN (SELECT {primary_key} FROM {view})
-            """)
+        # Expire matching current rows — close their valid_to window
+        self._exec(f"""
+            UPDATE {fqn}
+            SET _is_current = false, _valid_to = now(), _tx_time = now()
+            WHERE _is_current = true
+              AND {primary_key} IN (SELECT {primary_key} FROM {source_ref})
+        """)
 
-            # Insert new current versions
-            self._exec(f"""
-                INSERT INTO {fqn}
-                SELECT {insert_user_cols_str},
-                       CAST('{batch_id}' AS VARCHAR) AS _batch_id,
-                       now() AS _batch_ts,
-                       CAST(true AS BOOLEAN) AS _is_current,
-                       now() AS _tx_time,
-                       {vf_expr} AS _valid_from,
-                       {vt_expr} AS _valid_to
-                FROM {view}
-            """)
-        finally:
-            self._unregister(view)
+        # Insert new current versions
+        self._exec(f"""
+            INSERT INTO {fqn}
+            SELECT {insert_user_cols_str},
+                   CAST('{batch_id}' AS VARCHAR) AS _batch_id,
+                   now() AS _batch_ts,
+                   CAST(true AS BOOLEAN) AS _is_current,
+                   now() AS _tx_time,
+                   {vf_expr} AS _valid_from,
+                   {vt_expr} AS _valid_to
+            FROM {source_ref}
+        """)
 
         logger.info("Bitemporal %s: upserted %d rows in %s", batch_id[:8], n, table_name)
         return n
@@ -475,6 +528,23 @@ class Lakehouse:
             f"SELECT count(*) FROM lakehouse.default.{table_name}"
         ).fetchone()
         return result[0] if result else 0
+
+    # ── Datacube ────────────────────────────────────────────────────────
+
+    def datacube(self, table_name: str, **kwargs):
+        """Create a Datacube over a Lakehouse Iceberg table.
+
+        Queries go directly from S3 → DuckDB → result (no Python).
+        Short table names are auto-resolved to ``lakehouse.{ns}.{table}``.
+
+        Usage::
+
+            dc = lh.datacube("trades")
+            dc = dc.set_group_by("sector").set_pivot_by("side")
+            result = dc.query_df()
+        """
+        from datacube.engine import Datacube
+        return Datacube(self, source_name=table_name, **kwargs)
 
     def close(self) -> None:
         """Close the DuckDB connection."""

@@ -10,3 +10,4 @@ build/
 .pgdata/
 data/
 hs_err_pid*.log
+.test_runs/

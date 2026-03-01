@@ -49,14 +49,6 @@ def streaming_server():
     return _streaming
 
 
-def pytest_sessionfinish(session, exitstatus):
-    """Bypass Python finalization to avoid DH JVM segfault on teardown.
-
-    The embedded Deephaven JVM spawns daemon threads that crash during
-    Python's atexit / module cleanup.  os._exit() skips that entirely.
-    """
-    os._exit(exitstatus)
-
 
 # ── Market Data Server (with QuestDB) ────────────────────────────────────
 
