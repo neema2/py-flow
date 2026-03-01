@@ -281,6 +281,202 @@ Exercises all features: upload → 3 search modes → RAG Q&A → extraction →
 
 ---
 
+## Agents
+
+### Basic Agent
+
+```python
+from ai import Agent, tool
+
+@tool
+def get_price(symbol: str) -> str:
+    """Get the current price of a stock.
+
+    Args:
+        symbol: Ticker symbol (e.g. AAPL).
+    """
+    return '{"price": 150.25}'
+
+agent = Agent(
+    tools=[get_price],
+    system_prompt="You are a trading assistant.",
+)
+
+result = agent.run("What is AAPL trading at?")
+print(result.content)       # "AAPL is currently at $150.25"
+print(result.steps)         # [AgentStep(action=ToolCall(...), observation="...")]
+print(result.iterations)    # 2 (1 tool call + 1 final response)
+```
+
+The `@tool` decorator auto-generates JSON Schema from type hints and docstrings. No manual schema writing.
+
+### Multi-turn Conversations
+
+```python
+agent = Agent(system_prompt="You are a math tutor.")
+agent.run("What is 5 * 7?")       # "35"
+agent.run("Divide that by 5?")    # "7" — remembers context
+agent.reset()                      # clear history
+```
+
+### Persistent Memory
+
+```python
+from ai.memory import AgentMemory, bootstrap_conversations_table
+
+# Bootstrap (admin, once)
+bootstrap_conversations_table(admin_conn, grant_to="app_user")
+
+# Use
+memory = AgentMemory(store_conn=conn)
+agent = Agent(tools=[...], memory=memory, name="trading_agent")
+
+result = agent.run("Analyze AAPL risk")
+# Conversation auto-saved to PG
+
+# Later — resume
+agent.load_conversation(agent.conversation_id)
+agent.run("What about MSFT?")
+
+# Browse history
+convos = agent.list_conversations(limit=10)
+```
+
+Conversations are stored in PostgreSQL with auto-summarization for long threads (>20 messages).
+
+### Platform Tools (auto-registration)
+
+```python
+from ai._tools import ToolRegistry
+
+# Auto-register all built-in tools from platform services
+registry = ToolRegistry.from_platform(
+    media_store=ms,        # → search_documents, semantic_search, hybrid_search, list_documents
+    lakehouse=lh,          # → query_lakehouse, list_tables
+)
+```
+
+### Multi-Agent Teams
+
+```python
+from ai import Agent
+from ai.team import AgentTeam
+
+researcher = Agent(tools=[search_docs], system_prompt="You research documents.")
+analyst = Agent(tools=[query_lh], system_prompt="You analyze data.")
+
+team = AgentTeam(agents={"researcher": researcher, "analyst": analyst})
+result = team.run("Research Basel III docs and analyze capital impact")
+
+print(result.content)           # Synthesized answer
+print(result.delegation_log)    # Which agent handled what
+```
+
+The router LLM decomposes tasks and delegates to specialists sequentially.
+
+---
+
+## Evaluation
+
+### Eval Cases
+
+```python
+from ai.eval import EvalRunner, EvalCase
+
+cases = [
+    EvalCase(
+        input="What is AAPL trading at?",
+        expected_tools=["get_price"],
+        expected_output_contains=["AAPL", "price"],
+        tags=["tool_use", "price"],
+    ),
+    EvalCase(
+        input="Search for Basel III documents",
+        expected_tools=["hybrid_search"],
+        tags=["search"],
+    ),
+]
+
+runner = EvalRunner(agent=agent)
+results = runner.run(cases)
+runner.summary()
+# ==================================================
+#   Eval Results: 2/2 passed (100%)
+# ==================================================
+#   Avg latency:    1200ms
+#   Total tokens:   450
+#   Tool accuracy:  2/2 (100%)
+# ==================================================
+```
+
+### A/B Model Comparison
+
+```python
+agent_a = Agent(model="gemini-3-flash-preview", tools=[...])
+agent_b = Agent(model="gemini-2.0-flash", tools=[...])
+
+runner_a = EvalRunner(agent=agent_a)
+runner_b = EvalRunner(agent=agent_b)
+
+results_a = runner_a.run(cases)
+results_b = runner_b.run(cases)
+
+EvalRunner.compare(results_a, results_b, "Flash 3", "Flash 2")
+```
+
+### Built-in Eval Datasets
+
+```python
+from ai.eval_datasets import tool_use_cases, qa_cases, sql_cases
+
+cases = (
+    tool_use_cases() +              # pre-built tool calling tests
+    qa_cases(media_store) +         # auto-generated from uploaded docs
+    sql_cases(lakehouse)            # auto-generated from lakehouse tables
+)
+```
+
+### LLM-as-Judge
+
+```python
+runner = EvalRunner(agent=agent, judge=AI())
+
+cases = [
+    EvalCase(
+        input="Explain credit default swaps",
+        expected_output="A CDS is a financial derivative that transfers credit risk...",
+    ),
+]
+results = runner.run(cases)
+# Judge LLM evaluates if actual output matches expected semantically
+```
+
+---
+
+## Public API
+
+15 symbols exported from `ai/`:
+
+| Symbol | Kind | Description |
+|--------|------|-------------|
+| `AI` | class | Single entry point for all AI capabilities |
+| `Agent` | class | Tool-calling agent with conversation memory |
+| `AgentResult` | dataclass | Agent run result — content + steps + usage |
+| `AgentStep` | dataclass | One tool-call round: action + observation |
+| `AgentTeam` | class | Multi-agent orchestration with LLM router |
+| `Message` | dataclass | Conversation message (role, content) |
+| `LLMResponse` | dataclass | Response from generate/run_tool_loop |
+| `ToolCall` | dataclass | Tool call in LLMResponse.tool_calls |
+| `RAGResult` | dataclass | Response from ask() — answer + sources |
+| `ExtractionResult` | dataclass | Response from extract() — structured data |
+| `Tool` | dataclass | Custom tool definition (name, schema, function) |
+| `EvalRunner` | class | Run eval cases, summary, A/B compare |
+| `EvalCase` | dataclass | Eval test case — input, expected output/tools |
+| `EvalResult` | dataclass | Eval result — passed, latency, tools match |
+| `tool` | decorator | Convert typed function to Tool |
+
+---
+
 ## Test Coverage
 
 | Test suite | Count | What |
@@ -292,4 +488,5 @@ Exercises all features: upload → 3 search modes → RAG Q&A → extraction →
 | `test_rag.py` | 5 | RAG pipeline: ask, sources, semantic mode |
 | `test_tools.py` | 7 | Tool registry, search tools, LLM+tool integration |
 | `test_embed_upload.py` | 12 | Upload+embed, semantic search, hybrid search |
-| **Total** | **61** | All real API calls, real PG, real MinIO |
+| `test_agents.py` | 44 | @tool decorator, Agent, memory, team, eval, import hygiene |
+| **Total** | **105** | All real API calls, real PG, real S3 |

@@ -196,6 +196,21 @@ REGISTRY.define("positions", list,
     role="attribute",
 )
 
+REGISTRY.define("weights", dict,
+    description="Weight breakdown (e.g. sector weights)",
+    role="attribute",
+)
+
+REGISTRY.define("risk", float,
+    description="Risk metric value",
+    role="measure", unit="USD",
+)
+
+REGISTRY.define("risk_ranking", list,
+    description="Ranked list of risk contributors",
+    role="attribute",
+)
+
 REGISTRY.define("total_mv", float,
     description="Total market value across positions",
     role="measure", unit="USD",

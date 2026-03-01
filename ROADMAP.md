@@ -60,12 +60,12 @@ A governance-first data+AI platform in pure Python. This roadmap tracks what's b
 
 | # | Step | Status |
 |---|------|--------|
-| 11 | Agent class — tool-calling loop with plan → act → observe cycle | 🔲 |
-| 12 | Tool registry — `@tool` decorator, `registry.from_platform()` auto-registers all built-in tools | 🔲 |
-| 13 | Agent memory — conversation, storable-backed, LLM-summarized. All RLS + auditable | 🔲 |
-| 14 | Multi-agent orchestration — `AgentTeam` with router + delegation | 🔲 |
-| 15 | Eval framework — `EvalRunner` with cases, expected outputs, tool call assertions | 🔲 |
-| 16 | Eval datasets & metrics — built-in QA/tool-use/SQL benchmarks, A/B model comparison | 🔲 |
+| 11 | Agent class — tool-calling loop with plan → act → observe cycle | ✅ |
+| 12 | Tool registry — `@tool` decorator, `registry.from_platform()` auto-registers all built-in tools | ✅ |
+| 13 | Agent memory — conversation, storable-backed, LLM-summarized. All RLS + auditable | ✅ |
+| 14 | Multi-agent orchestration — `AgentTeam` with router + delegation | ✅ |
+| 15 | Eval framework — `EvalRunner` with cases, expected outputs, tool call assertions | ✅ |
+| 16 | Eval datasets & metrics — built-in QA/tool-use/SQL benchmarks, A/B model comparison | ✅ |
 
 **New files:** `ai/agents/`, `ai/eval/`  
 **Dependencies:** same as Phase 2 (no new deps)

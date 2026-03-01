@@ -511,3 +511,107 @@ REGISTRY.define("swap_count", int,
     role="measure", unit="units",
     category="fixed_income",
 )
+
+# ── Portfolio Risk ───────────────────────────────────────────────
+
+REGISTRY.define("sector", str,
+    description="Market sector classification (e.g. Technology, Financials)",
+    semantic_type="label",
+    role="dimension",
+    display_name="Sector",
+    category="portfolio",
+    synonyms=["industry", "sector classification"],
+)
+
+REGISTRY.define("implied_vol", float,
+    description="Implied volatility (annualized)",
+    semantic_type="percentage",
+    role="measure",
+    unit="ratio",
+    format=".2%",
+    display_name="Implied Vol",
+    category="risk",
+    synonyms=["iv", "implied volatility"],
+)
+
+REGISTRY.define("beta", float,
+    description="Beta relative to market benchmark",
+    semantic_type="ratio",
+    role="measure",
+    unit="ratio",
+    format=".2f",
+    display_name="Beta",
+    category="risk",
+)
+
+REGISTRY.define("var_1d_95", float,
+    description="1-day 95% parametric Value at Risk",
+    role="measure", unit="USD",
+    category="risk",
+)
+
+REGISTRY.define("var_1d_99", float,
+    description="1-day 99% parametric Value at Risk",
+    role="measure", unit="USD",
+    category="risk",
+)
+
+REGISTRY.define("total_value", float,
+    description="Total portfolio market value",
+    role="measure", unit="USD",
+    category="portfolio",
+)
+
+REGISTRY.define("total_unrealized_pnl", float,
+    description="Total unrealized P&L across positions",
+    role="measure", unit="USD",
+    category="risk",
+)
+
+REGISTRY.define("portfolio_var_95", float,
+    description="Diversified portfolio 1-day 95% VaR",
+    role="measure", unit="USD",
+    category="risk",
+)
+
+REGISTRY.define("portfolio_var_99", float,
+    description="Diversified portfolio 1-day 99% VaR",
+    role="measure", unit="USD",
+    category="risk",
+)
+
+REGISTRY.define("var_pct_95", float,
+    description="VaR as percentage of portfolio (95%)",
+    role="measure", unit="ratio",
+    category="risk",
+)
+
+REGISTRY.define("var_pct_99", float,
+    description="VaR as percentage of portfolio (99%)",
+    role="measure", unit="ratio",
+    category="risk",
+)
+
+REGISTRY.define("hhi", float,
+    description="Herfindahl-Hirschman Index for concentration",
+    role="measure", unit="ratio",
+    category="risk",
+)
+
+REGISTRY.define("concentration_level", str,
+    description="Portfolio concentration level (diversified/moderate/concentrated)",
+    role="attribute",
+    category="risk",
+)
+
+REGISTRY.define("sector_weights", dict,
+    description="Sector weight breakdown as percentage map",
+    role="attribute",
+    category="portfolio",
+)
+
+REGISTRY.define("top_risk_contributors", list,
+    description="Positions ranked by VaR contribution",
+    role="attribute",
+    category="risk",
+)

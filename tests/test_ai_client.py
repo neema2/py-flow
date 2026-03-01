@@ -233,11 +233,15 @@ class TestErrors:
 class TestImportHygiene:
 
     def test_only_public_symbols(self):
-        """ai.__all__ should have exactly 7 symbols."""
+        """ai.__all__ should have exactly 15 symbols."""
         import ai
         assert set(ai.__all__) == {
             "AI", "Message", "LLMResponse", "ToolCall",
             "RAGResult", "ExtractionResult", "Tool",
+            "Agent", "AgentResult", "AgentStep",
+            "AgentTeam",
+            "EvalRunner", "EvalCase", "EvalResult",
+            "tool",
         }
 
     def test_no_provider_in_dir(self):

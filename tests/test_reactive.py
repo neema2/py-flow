@@ -1149,6 +1149,151 @@ class TestReactiveProxySetattr:
 # ComputedProperty descriptor direct access
 # ===========================================================================
 
+# ===========================================================================
+# Aggregate DSL helpers (group_by, rank_by)
+# ===========================================================================
+
+class TestGroupBy:
+    """Tests for reactive.agg.group_by."""
+
+    def test_basic_grouping(self):
+        from reactive.agg import group_by
+        result = group_by([("A", 10), ("B", 20), ("A", 30)])
+        assert result == {"A": 40, "B": 20}
+
+    def test_normalize(self):
+        from reactive.agg import group_by
+        result = group_by([("Tech", 300), ("Finance", 100)], normalize=True)
+        assert result == {"Tech": 75.0, "Finance": 25.0}
+
+    def test_empty(self):
+        from reactive.agg import group_by
+        assert group_by([]) == {}
+
+    def test_single_group(self):
+        from reactive.agg import group_by
+        result = group_by([("X", 5), ("X", 10), ("X", 15)])
+        assert result == {"X": 30}
+
+    def test_normalize_single_group(self):
+        from reactive.agg import group_by
+        result = group_by([("X", 5), ("X", 10)], normalize=True)
+        assert result == {"X": 100.0}
+
+    def test_normalize_zero_total(self):
+        from reactive.agg import group_by
+        result = group_by([("A", 0), ("B", 0)], normalize=True)
+        assert result == {"A": 0.0, "B": 0.0}
+
+
+class TestRankBy:
+    """Tests for reactive.agg.rank_by."""
+
+    def test_basic_sort_desc(self):
+        from reactive.agg import rank_by
+        result = rank_by([("AAPL", 5000), ("NVDA", 8000), ("MSFT", 3000)])
+        assert result[0]["label"] == "NVDA"
+        assert result[0]["value"] == 8000
+        assert result[-1]["label"] == "MSFT"
+
+    def test_sort_asc(self):
+        from reactive.agg import rank_by
+        result = rank_by([("AAPL", 5000), ("NVDA", 8000)], desc=False)
+        assert result[0]["label"] == "AAPL"
+
+    def test_as_pct(self):
+        from reactive.agg import rank_by
+        result = rank_by([("A", 10), ("B", 0)], as_pct=True)
+        assert result[0]["label"] == "A"
+        assert result[0]["pct"] == 100.0
+        assert result[1]["pct"] == 0.0
+
+    def test_as_pct_all_zero(self):
+        from reactive.agg import rank_by
+        result = rank_by([("A", 0), ("B", 0)], as_pct=True)
+        assert all(r["pct"] == 0.0 for r in result)
+
+    def test_empty(self):
+        from reactive.agg import rank_by
+        assert rank_by([]) == []
+
+
+class TestAggInsideComputed:
+    """Test group_by/rank_by inside @computed on a Portfolio Storable."""
+
+    def test_group_by_reactive(self):
+        """group_by recomputes when child position price changes."""
+        from reactive.agg import group_by
+
+        @dataclass
+        class TaggedPosition(Storable):
+            symbol: str = ""
+            price: float = 0.0
+            quantity: int = 0
+            label: str = ""
+
+            @computed
+            def mv(self):
+                return self.price * self.quantity
+
+        @dataclass
+        class GroupPortfolio(Storable):
+            positions: list = field(default_factory=list)
+
+            @computed
+            def weights(self):
+                return group_by([(p.label, p.mv) for p in self.positions],
+                                normalize=True)
+
+        p1 = TaggedPosition(symbol="AAPL", price=100.0, quantity=10, label="Tech")
+        p2 = TaggedPosition(symbol="JPM", price=50.0, quantity=10, label="Finance")
+        port = GroupPortfolio(positions=[p1, p2])
+
+        w = port.weights
+        assert w["Tech"] == pytest.approx(66.7, abs=0.1)
+        assert w["Finance"] == pytest.approx(33.3, abs=0.1)
+
+        # Price tick → reactive recomputation
+        p1.batch_update(price=200.0)
+        w2 = port.weights
+        assert w2["Tech"] == pytest.approx(80.0, abs=0.1)
+
+    def test_rank_by_reactive(self):
+        """rank_by recomputes when child position price changes."""
+        from reactive.agg import rank_by
+
+        @dataclass
+        class RankedPosition(Storable):
+            symbol: str = ""
+            price: float = 0.0
+            quantity: int = 0
+
+            @computed
+            def risk(self):
+                return self.price * self.quantity * 0.02
+
+        @dataclass
+        class RiskPortfolio(Storable):
+            positions: list = field(default_factory=list)
+
+            @computed
+            def risk_ranking(self):
+                return rank_by([(p.symbol, p.risk) for p in self.positions],
+                               as_pct=True)
+
+        p1 = RankedPosition(symbol="AAPL", price=100.0, quantity=10)
+        p2 = RankedPosition(symbol="NVDA", price=50.0, quantity=10)
+        port = RiskPortfolio(positions=[p1, p2])
+
+        r = port.risk_ranking
+        assert r[0]["label"] == "AAPL"  # AAPL has higher risk
+
+        # NVDA price spike → should flip ranking
+        p2.batch_update(price=300.0)
+        r2 = port.risk_ranking
+        assert r2[0]["label"] == "NVDA"
+
+
 class TestComputedPropertyDescriptor:
     """Tests for ComputedProperty.__get__ via direct descriptor call."""
 

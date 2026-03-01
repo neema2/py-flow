@@ -51,7 +51,7 @@ Every service follows the same pattern: **`XxxServer`** (platform/admin) → **`
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-**943 tests**, zero skips, zero failures. All services auto-start in the test harness.
+**987 tests**, zero skips, zero failures. All services auto-start in the test harness.
 
 ---
 
@@ -930,7 +930,7 @@ py-flow/
 │   ├── test_vector_search.py         # pgvector cosine search (12)
 │   ├── test_embed_upload.py          # Embed + upload + semantic search (12)
 │   ├── test_ai_client.py             # AI generation, RAG, tools (11)
-│   └── ...                           # 943 tests total, 0 skips
+│   └── ...                           # 987 tests total, 0 skips
 ├── demo_ir_swap.py         # IRS reactive grid → DH ticking tables
 ├── demo_bridge.py          # Store + @computed → DH ticking tables
 ├── demo_trading.py         # Trading server: prices + risk → DH tables
