@@ -33,18 +33,18 @@ def create_catalog(
     s3_region: str | None = None,
 ):
     """
-    Create a PyIceberg REST catalog connected to Lakekeeper + MinIO.
+    Create a PyIceberg REST catalog connected to Lakekeeper + S3-compatible storage.
 
     All parameters can be overridden via environment variables:
-        LAKEKEEPER_URI, LAKEHOUSE_WAREHOUSE, MINIO_ENDPOINT,
-        MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_REGION
+        LAKEKEEPER_URI, LAKEHOUSE_WAREHOUSE, S3_ENDPOINT,
+        S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION
     """
     catalog_uri = uri or os.environ.get("LAKEKEEPER_URI", DEFAULT_CATALOG_URI)
     wh = warehouse or os.environ.get("LAKEHOUSE_WAREHOUSE", DEFAULT_WAREHOUSE)
-    endpoint = s3_endpoint or os.environ.get("MINIO_ENDPOINT", DEFAULT_S3_ENDPOINT)
-    access = s3_access_key or os.environ.get("MINIO_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
-    secret = s3_secret_key or os.environ.get("MINIO_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
-    region = s3_region or os.environ.get("MINIO_REGION", DEFAULT_S3_REGION)
+    endpoint = s3_endpoint or os.environ.get("S3_ENDPOINT", DEFAULT_S3_ENDPOINT)
+    access = s3_access_key or os.environ.get("S3_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
+    secret = s3_secret_key or os.environ.get("S3_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
+    region = s3_region or os.environ.get("S3_REGION", DEFAULT_S3_REGION)
 
     logger.info("Creating Iceberg REST catalog: uri=%s, warehouse=%s", catalog_uri, wh)
 

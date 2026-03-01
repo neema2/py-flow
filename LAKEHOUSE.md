@@ -1,6 +1,6 @@
 # Lakehouse — Iceberg Analytical Store
 
-All reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeeper REST catalog + MinIO S3 storage. Syncs platform data from PG and QuestDB, plus user-facing ingest/transform API.
+All reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeeper REST catalog + S3-compatible storage. Syncs platform data from PG and QuestDB, plus user-facing ingest/transform API.
 
 ---
 
@@ -10,10 +10,10 @@ All reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeep
 ┌─────────────────────────────────────────────────────────────────┐
 │  Platform Sync (SyncEngine)     User API (Lakehouse)            │
 │                                                                 │
-│  PG object_events ──→ PyIceberg ──→ MinIO S3                   │
+│  PG object_events ──→ PyIceberg ──→ S3 storage                │
 │  QuestDB ticks    ──→            ──→ (Parquet)                  │
 │                                                                 │
-│  Lakehouse.ingest()  ──→ DuckDB SQL ──→ Iceberg ──→ MinIO S3   │
+│  Lakehouse.ingest()  ──→ DuckDB SQL ──→ Iceberg ──→ S3        │
 │  Lakehouse.transform() ──→                                      │
 │  Lakehouse.query()   ──→ DuckDB SQL ──→ reads Parquet           │
 │                                                                 │
@@ -24,7 +24,7 @@ All reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeep
 | Component | Technology | Port |
 |-----------|-----------|------|
 | **Catalog** | Lakekeeper (Rust binary) | 8181 |
-| **Storage** | MinIO (Go binary) | 9002 (API), 9003 (Console) |
+| **Storage** | S3-compatible (via objectstore) | 9002 (API), 9003 (Console) |
 | **Read/Write** | DuckDB 1.4 + Iceberg extension | In-process |
 | **Platform Sync** | PyIceberg + PyArrow | In-process |
 
@@ -34,7 +34,7 @@ All reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeep
 
 ```bash
 pip install -e ".[lakehouse]"
-python3 demo_lakehouse.py   # auto-starts MinIO + Lakekeeper
+python3 demo_lakehouse.py   # auto-starts object store + Lakekeeper
 ```
 
 ```python
@@ -65,7 +65,7 @@ lakehouse/
 ├── catalog.py       # PyIceberg REST catalog setup via Lakekeeper
 ├── tables.py        # Iceberg table definitions (events, ticks, bars_daily, positions)
 ├── sync.py          # Incremental ETL: PG + QuestDB → Iceberg (watermark-based)
-├── services.py      # Lakekeeper + MinIO binary lifecycle (download/start/stop)
+├── services.py      # Lakekeeper binary lifecycle + objectstore integration
 └── models.py        # Pydantic: SyncState, TableInfo
 ```
 
@@ -261,7 +261,7 @@ Watermarks persisted to `data/lakehouse/sync_state.json`.
 
 ## Service Management
 
-Both Lakekeeper and MinIO are auto-downloaded and subprocess-managed:
+Lakekeeper is auto-downloaded and subprocess-managed. Object storage uses the `objectstore` package:
 
 ```python
 import asyncio
@@ -282,9 +282,9 @@ asyncio.run(stop_lakehouse(stack))
 | `LAKEKEEPER_URI` | `http://localhost:8181/catalog` | Lakekeeper REST catalog URL |
 | `LAKEKEEPER_PG_URL` | (from pgserver) | PG connection URL for Lakekeeper |
 | `LAKEHOUSE_WAREHOUSE` | `lakehouse` | Iceberg warehouse name |
-| `MINIO_ENDPOINT` | `http://localhost:9002` | MinIO S3 endpoint |
-| `MINIO_ACCESS_KEY` | `minioadmin` | MinIO access key |
-| `MINIO_SECRET_KEY` | `minioadmin` | MinIO secret key |
+| `S3_ENDPOINT` | `http://localhost:9002` | S3-compatible endpoint |
+| `S3_ACCESS_KEY` | `minioadmin` | S3 access key |
+| `S3_SECRET_KEY` | `minioadmin` | S3 secret key |
 
 ---
 
@@ -296,7 +296,7 @@ lakehouse = [
     "pyiceberg[pyarrow]>=0.8.0",
     "duckdb>=1.4.0",
     "pyarrow>=14.0",
-    "minio>=7.0",
+    # minio SDK used internally via objectstore package
     "httpx>=0.27.0",
 ]
 ```
@@ -306,7 +306,7 @@ lakehouse = [
 | Binary | Size | Language | Purpose |
 |--------|------|----------|---------|
 | Lakekeeper | ~30MB | Rust | Iceberg REST catalog |
-| MinIO | ~100MB | Go | S3-compatible storage |
+| Object store | ~100MB | Go | S3-compatible storage (via objectstore) |
 
 ---
 
@@ -316,5 +316,5 @@ lakehouse = [
 |---------|------|----------|------|
 | PostgreSQL (embedded) | 5488 | C | Object store + Lakekeeper catalog metadata |
 | Lakekeeper | 8181 | Rust | Iceberg REST catalog API |
-| MinIO | 9002/9003 | Go | S3 storage for Parquet data files |
+| Object store | 9002/9003 | Go | S3 storage for Parquet data files |
 | QuestDB | 8812/9000/9009 | Java | Time-series DB (optional, for tick sync) |

@@ -2,7 +2,7 @@
 
 A governance-first reactive platform backed by **PostgreSQL** with **[Deephaven.io](https://deephaven.io)** for real-time streaming — featuring a **bi-temporal event-sourced object store**, a **reactive expression language** that compiles to Python, SQL, and Legend Pure, and **durable workflow orchestration** with zero external infrastructure.
 
-Every service follows the same pattern: **`XxxServer`** (platform/admin) → **`connect()` / `Xxx()`** (user code). Implementation details (PG, MinIO, QuestDB, Deephaven JVM, uvicorn) are hidden.
+Every service follows the same pattern: **`XxxServer`** (platform/admin) → **`connect()` / `Xxx()`** (user code). Implementation details (PG, S3, QuestDB, Deephaven JVM, uvicorn) are hidden.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -14,8 +14,8 @@ Every service follows the same pattern: **`XxxServer`** (platform/admin) → **`
 │  └────┬─────┘ └────┬─────┘ └───┬───┘ └────┬────┘ └─────┬─────┘  │
 │       │            │           │          │            │          │
 │  ┌────┴─────┐ ┌────┴─────┐ ┌──┴───┐ ┌────┴────┐ ┌─────┴─────┐  │
-│  │Embedded  │ │Embedded  │ │MinIO │ │Lakekeeper│ │  QuestDB  │  │
-│  │PG + RLS  │ │PG + DBOS │ │  S3  │ │+MinIO+PG│ │  binary   │  │
+│  │Embedded  │ │Embedded  │ │  S3  │ │Lakekeeper│ │  QuestDB  │  │
+│  │PG + RLS  │ │PG + DBOS │ │ store│ │ +S3+PG  │ │  binary   │  │
 │  └──────────┘ └──────────┘ └──────┘ └─────────┘ └───────────┘  │
 │                                                                  │
 │  ┌────────────┐  ┌───────────────┐                               │
@@ -162,10 +162,10 @@ db = connect("demo", user="alice", password="pw")
 | `StreamingServer` | `streaming.admin` | Deephaven JVM | `DeephavenClient()` |
 | `MarketDataServer` | `marketdata.admin` | FastAPI + simulator + QuestDB | REST / WebSocket |
 | `TsdbServer` | `timeseries.admin` | QuestDB binary | `Timeseries("alias")` |
-| `MediaServer` | `media.admin` | MinIO S3 | `MediaStore("alias", ai=)` |
-| `LakehouseServer` | `lakehouse.admin` | Lakekeeper + MinIO + PG | `Lakehouse("alias")` |
+| `MediaServer` | `media.admin` | S3 object store | `MediaStore("alias", ai=)` |
+| `LakehouseServer` | `lakehouse.admin` | Lakekeeper + S3 + PG | `Lakehouse("alias")` |
 
-Each `XxxServer` has `start()`, `stop()`, and `register_alias()`. Users never see the implementation — no PG connection strings, no MinIO credentials, no JVM args.
+Each `XxxServer` has `start()`, `stop()`, and `register_alias()`. Users never see the implementation — no PG connection strings, no S3 credentials, no JVM args.
 
 ---
 
@@ -740,11 +740,11 @@ pip install -e ".[timeseries]"
 
 ## Lakehouse
 
-Iceberg analytical store — all reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeeper + MinIO S3 storage. See [LAKEHOUSE.md](LAKEHOUSE.md) for full docs.
+Iceberg analytical store — all reads and writes via DuckDB SQL (Iceberg extension + REST catalog). Lakekeeper + S3-compatible storage. See [LAKEHOUSE.md](LAKEHOUSE.md) for full docs.
 
 ```bash
 pip install -e ".[lakehouse]"
-python3 demo_lakehouse.py   # auto-starts MinIO + Lakekeeper
+python3 demo_lakehouse.py   # auto-starts object store + Lakekeeper
 ```
 
 ```python
@@ -844,7 +844,7 @@ response = ai.run_tool_loop("Find Basel III docs", tools=ai.search_tools(ms))
 ```
 py-flow/
 ├── store/
-│   ├── admin.py            # StoreServer (alias: ObjectStoreServer)
+│   ├── admin.py            # StoreServer
 │   ├── base.py             # Storable base class + bi-temporal metadata
 │   ├── client.py           # StoreClient (event-sourced, bi-temporal)
 │   ├── connection.py       # connect() + alias registry
@@ -888,19 +888,22 @@ py-flow/
 │   ├── models.py           # Bar, HistoryQuery, BarQuery
 │   └── backends/questdb/   # QuestDB: manager, writer (ILP), reader (PGWire)
 ├── lakehouse/
-│   ├── admin.py            # LakehouseServer (Lakekeeper + MinIO + PG)
+│   ├── admin.py            # LakehouseServer (Lakekeeper + S3 + PG)
 │   ├── catalog.py          # PyIceberg REST catalog
 │   ├── query.py            # Lakehouse class: query, ingest, transform
 │   ├── sync.py             # Incremental ETL: PG + QuestDB → Iceberg
 │   ├── services.py         # Binary lifecycle managers
 │   └── models.py           # SyncState, TableInfo
 ├── media/
-│   ├── admin.py            # MediaServer (MinIO lifecycle)
+│   ├── admin.py            # MediaServer (object store lifecycle)
 │   ├── store.py            # MediaStore: upload, download, search
 │   ├── models.py           # Document Storable + search schema
 │   ├── chunking.py         # Sentence-aware text chunking
-│   ├── extraction.py       # Text extraction: PDF, text, markdown, HTML
-│   └── _minio.py           # MinIO management (hidden)
+│   └── extraction.py       # Text extraction: PDF, text, markdown, HTML
+├── objectstore/
+│   ├── __init__.py         # ObjectStore ABC, configure(), S3Client
+│   ├── _minio.py           # MinIO backend (private)
+│   └── client.py           # S3Client: upload, download, delete, presign
 ├── ai/
 │   ├── __init__.py         # 7 public symbols: AI, Message, LLMResponse, ...
 │   ├── client.py           # AI class — single entry point

@@ -10,13 +10,13 @@ Upload, download, and search documents, images, audio, and video with full-text 
 ┌─────────────────────────────────────────────────────────────────┐
 │  MediaStore API                                                 │
 │                                                                 │
-│  ms.upload(file)  ──→ MinIO S3 (binary content)                 │
+│  ms.upload(file)  ──→ S3 storage (binary content)               │
 │                   ──→ PG object_events (Document Storable)      │
 │                   ──→ PG document_search (tsvector + GIN)       │
 │                   ──→ text extraction (PDF, text, md, HTML)     │
 │                                                                 │
 │  ms.search("query")  ──→ PG tsvector full-text search (RLS)    │
-│  ms.download(doc)    ──→ MinIO S3 → bytes                       │
+│  ms.download(doc)    ──→ S3 storage → bytes                     │
 │  ms.list()           ──→ PG Storable.query() (RLS)              │
 │                                                                 │
 │  SyncEngine (existing)  ──→ Document metadata → Iceberg         │
@@ -26,7 +26,7 @@ Upload, download, and search documents, images, audio, and video with full-text 
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Binary storage** | MinIO S3 | File content (media bucket) |
+| **Binary storage** | S3-compatible storage | File content (media bucket) |
 | **Metadata** | PG object_events (Storable) | Bi-temporal, RLS, event-sourced |
 | **Search index** | PG document_search (tsvector + GIN) | Full-text search with ranking |
 | **Text extraction** | pymupdf, beautifulsoup4 | PDF, HTML text extraction |
@@ -63,7 +63,7 @@ media/
 ├── store.py           # MediaStore class: upload, download, search, list, delete
 ├── models.py          # Document Storable + document_search schema (RLS)
 ├── extraction.py      # Text extraction: PDF, text, markdown, HTML
-└── s3.py              # S3Client wrapper (MinIO upload/download/presign)
+└── (uses objectstore/) # S3Client via objectstore package
 ```
 
 ---
@@ -87,7 +87,7 @@ On upload, MediaStore:
 2. Detects content type from filename
 3. Extracts searchable text (if supported)
 4. Saves Document metadata to PG (Storable)
-5. Uploads binary to MinIO at `media/{entity_id}/{filename}`
+5. Uploads binary to S3 at `media/{entity_id}/{filename}`
 6. Updates the full-text search index
 
 ---
@@ -272,7 +272,7 @@ lh.transform("documents",
 ```toml
 [project.optional-dependencies]
 media = [
-    "minio>=7.0",
+    # minio SDK is used internally via objectstore package
     "pymupdf>=1.24.0",
     "beautifulsoup4>=4.12.0",
 ]

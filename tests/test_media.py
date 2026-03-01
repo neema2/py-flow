@@ -1,7 +1,7 @@
 """
 Unit tests for the media package — extraction, content type detection, and models.
 
-No external services needed (no MinIO, no PG).
+No external services needed (no S3, no PG).
 """
 
 import pytest

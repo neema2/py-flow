@@ -1,7 +1,7 @@
 """
 Integration tests for embed-on-upload pipeline.
 
-Requires: embedded PG + MinIO + GEMINI_API_KEY.
+Requires: embedded PG + S3-compatible object store + GEMINI_API_KEY.
 Tests the full upload → chunk → embed → store → query flow.
 """
 
@@ -40,21 +40,19 @@ def pg_server():
 
 
 @pytest.fixture(scope="module")
-def minio_manager():
-    """Start MinIO for S3 storage."""
-    from lakehouse.services import MinIOManager
-
+def s3_server():
+    """Start S3-compatible object store."""
+    import objectstore
     import tempfile
-    minio = MinIOManager(
-        data_dir=tempfile.mkdtemp(prefix="test_embed_minio_"),
+    loop = asyncio.new_event_loop()
+    store = loop.run_until_complete(objectstore.configure(
+        "minio",
+        data_dir=tempfile.mkdtemp(prefix="test_embed_s3_"),
         api_port=9022,
         console_port=9023,
-    )
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(minio.start())
-    yield minio
-    loop.run_until_complete(minio.stop())
-    loop.close()
+    ))
+    yield store
+    # atexit handles cleanup
 
 
 @pytest.fixture(scope="module")
@@ -69,7 +67,7 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store_no_embed(minio_manager, store_conn):
+def media_store_no_embed(s3_server, store_conn):
     """MediaStore WITHOUT embedding provider."""
     from media import MediaStore
     ms = MediaStore(
@@ -83,7 +81,7 @@ def media_store_no_embed(minio_manager, store_conn):
 
 
 @pytest.fixture(scope="module")
-def media_store_with_embed(minio_manager, store_conn):
+def media_store_with_embed(s3_server, store_conn):
     """MediaStore WITH Gemini embedding provider."""
     if not GEMINI_API_KEY:
         pytest.skip("GEMINI_API_KEY not set")

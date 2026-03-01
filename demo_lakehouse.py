@@ -22,6 +22,7 @@ import asyncio
 import logging
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
@@ -156,18 +157,18 @@ async def run_demo(args):
     from timeseries.factory import create_backend
 
     # Object store (Storable PG)
-    server = StoreServer(data_dir="data/demo_lakehouse_store")
+    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="dm_lh_st_", dir="/tmp"))
     server.start()
     server.provision_user("demo_user", "demo_pw")
 
-    # Lakehouse infra (Lakekeeper PG + Lakekeeper + MinIO)
-    stack = LakehouseServer(data_dir="data/demo_lakehouse")
+    # Lakehouse infra (PG + Lakekeeper + object store)
+    stack = LakehouseServer(data_dir=tempfile.mkdtemp(prefix="dm_lh_", dir="/tmp"))
     await stack.start()
 
     # TSDB (QuestDB)
     backend = create_backend(
         "questdb",
-        data_dir="data/demo_lakehouse_questdb",
+        data_dir=tempfile.mkdtemp(prefix="dm_lh_q_", dir="/tmp"),
         http_port=19200,
         ilp_port=19209,
         pg_port=18992,

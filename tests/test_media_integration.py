@@ -1,7 +1,7 @@
 """
 Integration tests for the media package.
 
-Requires: embedded PG (via StoreServer) + MinIO (via lakehouse services).
+Requires: embedded PG (via StoreServer) + S3-compatible object store.
 Tests the full upload → extract → search → download → delete flow.
 """
 
@@ -27,21 +27,19 @@ def pg_server():
 
 
 @pytest.fixture(scope="session")
-def minio_manager():
-    """Start MinIO for S3 storage."""
-    from lakehouse.services import MinIOManager
-
+def s3_server():
+    """Start S3-compatible object store."""
+    import objectstore
     import tempfile
-    minio = MinIOManager(
-        data_dir=tempfile.mkdtemp(prefix="test_media_minio_"),
+    loop = asyncio.new_event_loop()
+    store = loop.run_until_complete(objectstore.configure(
+        "minio",
+        data_dir=tempfile.mkdtemp(prefix="test_media_s3_"),
         api_port=9012,
         console_port=9013,
-    )
-    loop = asyncio.new_event_loop()
-    loop.run_until_complete(minio.start())
-    yield minio
-    loop.run_until_complete(minio.stop())
-    loop.close()
+    ))
+    yield store
+    # atexit handles cleanup
 
 
 @pytest.fixture(scope="session")
@@ -66,8 +64,8 @@ def search_schema(pg_server, store_conn):
 
 
 @pytest.fixture(scope="session")
-def media_store(minio_manager, store_conn, search_schema):
-    """Create a MediaStore connected to test MinIO."""
+def media_store(s3_server, store_conn, search_schema):
+    """Create a MediaStore connected to test object store."""
     from media import MediaStore
     ms = MediaStore(
         s3_endpoint="localhost:9012",
@@ -303,6 +301,6 @@ and *volatility surface* construction.
         assert found is None
 
         # But S3 object is still there (retained for audit)
-        from media.s3 import S3Client
+        from objectstore import S3Client
         s3 = S3Client(endpoint="localhost:9012", bucket="test-media")
         assert s3.exists(doc.s3_key)

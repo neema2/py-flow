@@ -1,8 +1,8 @@
 """
-Lakehouse Service Managers — Lakekeeper + MinIO
-=================================================
+Lakehouse Service Managers — EmbeddedPG + Lakekeeper + ObjectStore
+==================================================================
 Auto-download, start, health-check, and stop Lakekeeper (Iceberg REST catalog)
-and MinIO (S3-compatible object storage). Same subprocess pattern as QuestDB.
+and object storage (via ``objectstore.configure()``).
 """
 
 from __future__ import annotations
@@ -261,18 +261,18 @@ class LakehouseStack:
     Properties:
         pg_url: PostgreSQL connection URL (for SyncEngine).
         catalog_url: Lakekeeper REST catalog URL.
-        s3_endpoint: MinIO S3 endpoint URL.
+        s3_endpoint: S3-compatible endpoint URL.
     """
 
     def __init__(
         self,
         pg: EmbeddedPGManager,
         lakekeeper: LakekeeperManager,
-        minio: MinIOManager,
+        s3_store,
     ):
         self._pg = pg
         self._lakekeeper = lakekeeper
-        self._minio = minio
+        self._s3_store = s3_store
 
     @property
     def pg_url(self) -> str:
@@ -284,32 +284,29 @@ class LakehouseStack:
 
     @property
     def s3_endpoint(self) -> str:
-        return self._minio.endpoint
+        return self._s3_store.endpoint
 
 
 async def start_lakehouse(
     data_dir: str = "data/lakehouse",
     pg_port: int = 5488,
     lakekeeper_port: int = 8181,
-    minio_api_port: int = 9002,
-    minio_console_port: int = 9003,
+    s3_api_port: int = 9002,
+    s3_console_port: int = 9003,
     warehouse: str = "lakehouse",
     bucket: str = "lakehouse",
 ) -> LakehouseStack:
     """
-    Start the full lakehouse stack: EmbeddedPG → Lakekeeper → MinIO.
+    Start the full lakehouse stack: EmbeddedPG → ObjectStore → Lakekeeper.
 
-    Downloads binaries on first run (~30s each for PG, Lakekeeper, MinIO).
+    Downloads binaries on first run (~30s each for PG, Lakekeeper, object store).
     Subsequent starts are fast (< 5s total).
 
     Returns a LakehouseStack with all managers and connection info.
     """
+    import objectstore
+
     pg = EmbeddedPGManager(data_dir=f"{data_dir}/postgres", port=pg_port)
-    minio = MinIOManager(
-        data_dir=f"{data_dir}/minio",
-        api_port=minio_api_port,
-        console_port=minio_console_port,
-    )
     lk = LakekeeperManager(
         data_dir=f"{data_dir}/lakekeeper",
         port=lakekeeper_port,
@@ -318,31 +315,36 @@ async def start_lakehouse(
     # Start PG first (Lakekeeper depends on it)
     await pg.start()
 
-    # Start MinIO (Lakekeeper warehouse depends on it)
-    await minio.start()
-    await minio.ensure_bucket(bucket)
+    # Start object store (Lakekeeper warehouse depends on it)
+    s3_store = await objectstore.configure(
+        "minio",
+        data_dir=f"{data_dir}/objectstore",
+        api_port=s3_api_port,
+        console_port=s3_console_port,
+    )
+    await s3_store.ensure_bucket(bucket)
 
-    # Start Lakekeeper (depends on both PG and MinIO)
+    # Start Lakekeeper (depends on both PG and object store)
     await lk.start(pg_url=pg.pg_url)
     await lk.bootstrap()
     await lk.create_warehouse(
         name=warehouse,
         bucket=bucket,
-        s3_endpoint=minio.endpoint,
+        s3_endpoint=s3_store.endpoint,
     )
 
     logger.info(
-        "Lakehouse stack running: PG=%d, Lakekeeper=%d, MinIO=%d",
-        pg_port, lakekeeper_port, minio_api_port,
+        "Lakehouse stack running: PG=%d, Lakekeeper=%d, S3=%d",
+        pg_port, lakekeeper_port, s3_api_port,
     )
-    stack = LakehouseStack(pg=pg, lakekeeper=lk, minio=minio)
+    stack = LakehouseStack(pg=pg, lakekeeper=lk, s3_store=s3_store)
     return stack
 
 
 async def stop_lakehouse(stack: LakehouseStack) -> None:
     """Stop all lakehouse services in reverse order."""
     await stack._lakekeeper.stop()
-    await stack._minio.stop()
+    # Object store cleanup handled by atexit
     await stack._pg.stop()
     logger.info("Lakehouse stack stopped")
 
@@ -503,7 +505,7 @@ class LakekeeperManager:
         s3_secret_key: str = "minioadmin",
         s3_region: str = "us-east-1",
     ) -> None:
-        """Create a warehouse in Lakekeeper pointing at MinIO. Idempotent."""
+        """Create a warehouse in Lakekeeper pointing at S3 storage. Idempotent."""
         url = f"http://localhost:{self._port}/management/v1/warehouse"
         payload = {
             "warehouse-name": name,
@@ -582,160 +584,3 @@ class LakekeeperManager:
         return binary
 
 
-# ── MinIO ───────────────────────────────────────────────────────────────────
-
-_MINIO_URLS = {
-    ("darwin", "arm64"): "https://dl.min.io/server/minio/release/darwin-arm64/minio",
-    ("darwin", "aarch64"): "https://dl.min.io/server/minio/release/darwin-arm64/minio",
-    ("darwin", "x86_64"): "https://dl.min.io/server/minio/release/darwin-amd64/minio",
-    ("linux", "x86_64"): "https://dl.min.io/server/minio/release/linux-amd64/minio",
-    ("linux", "aarch64"): "https://dl.min.io/server/minio/release/linux-arm64/minio",
-    ("linux", "arm64"): "https://dl.min.io/server/minio/release/linux-arm64/minio",
-}
-
-
-def _minio_download_url() -> str:
-    """Detect the correct MinIO download URL for the current platform."""
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-    key = (system, machine)
-    if key not in _MINIO_URLS:
-        raise RuntimeError(
-            f"No MinIO binary for {system}/{machine}. "
-            "Use Docker instead: docker run -p 9002:9000 minio/minio server /data"
-        )
-    return _MINIO_URLS[key]
-
-
-class MinIOManager:
-    """Manages MinIO binary lifecycle: download, start, create bucket, stop."""
-
-    def __init__(
-        self,
-        data_dir: str = "data/lakehouse/minio",
-        api_port: int = 9002,
-        console_port: int = 9003,
-        access_key: str = "minioadmin",
-        secret_key: str = "minioadmin",
-    ):
-        self._data_dir = Path(data_dir).resolve()
-        self._api_port = api_port
-        self._console_port = console_port
-        self._access_key = access_key
-        self._secret_key = secret_key
-        self._process: Optional[subprocess.Popen] = None
-
-    @property
-    def is_running(self) -> bool:
-        return self._process is not None and self._process.poll() is None
-
-    @property
-    def endpoint(self) -> str:
-        return f"http://localhost:{self._api_port}"
-
-    async def start(self) -> None:
-        """Download if needed, start MinIO, create default bucket."""
-        if await self.health():
-            logger.info("MinIO already running on port %d", self._api_port)
-            return
-
-        binary = self._ensure_binary()
-        storage_dir = self._data_dir / "storage"
-        storage_dir.mkdir(parents=True, exist_ok=True)
-
-        env = os.environ.copy()
-        env["MINIO_ROOT_USER"] = self._access_key
-        env["MINIO_ROOT_PASSWORD"] = self._secret_key
-
-        cmd = [
-            str(binary), "server",
-            str(storage_dir),
-            "--address", f":{self._api_port}",
-            "--console-address", f":{self._console_port}",
-        ]
-
-        logger.info("Starting MinIO on port %d...", self._api_port)
-        self._process = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        for attempt in range(20):
-            await asyncio.sleep(1)
-            if await self.health():
-                logger.info(
-                    "MinIO started (API=%d, Console=%d)",
-                    self._api_port, self._console_port,
-                )
-                return
-            if self._process.poll() is not None:
-                stderr = self._process.stderr.read().decode() if self._process.stderr else ""
-                raise RuntimeError(f"MinIO exited during startup: {stderr[:500]}")
-
-        raise RuntimeError(f"MinIO failed to start within 20s (port {self._api_port})")
-
-    async def stop(self) -> None:
-        """Gracefully stop MinIO."""
-        if self._process and self._process.poll() is None:
-            logger.info("Stopping MinIO (pid=%d)", self._process.pid)
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                logger.warning("MinIO did not stop gracefully, killing")
-                self._process.kill()
-                self._process.wait(timeout=5)
-            logger.info("MinIO stopped")
-        self._process = None
-
-    async def health(self) -> bool:
-        """Check MinIO health via /minio/health/live endpoint."""
-        url = f"http://localhost:{self._api_port}/minio/health/live"
-        try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(url)
-                return resp.status_code == 200
-        except Exception:
-            return False
-
-    async def ensure_bucket(self, bucket: str = "lakehouse") -> None:
-        """Create a bucket if it doesn't exist. Uses the minio Python client."""
-        try:
-            from minio import Minio
-            client = Minio(
-                f"localhost:{self._api_port}",
-                access_key=self._access_key,
-                secret_key=self._secret_key,
-                secure=False,
-            )
-            if not client.bucket_exists(bucket):
-                client.make_bucket(bucket)
-                logger.info("Created MinIO bucket '%s'", bucket)
-            else:
-                logger.info("MinIO bucket '%s' already exists", bucket)
-        except Exception as e:
-            logger.warning("Failed to ensure MinIO bucket '%s': %s", bucket, e)
-
-    def _ensure_binary(self) -> Path:
-        """Ensure MinIO binary is available, downloading if needed."""
-        bin_dir = self._data_dir / "bin"
-        binary = bin_dir / "minio"
-        if binary.exists() and os.access(binary, os.X_OK):
-            return binary
-
-        logger.info("MinIO binary not found, downloading...")
-        url = _minio_download_url()
-
-        bin_dir.mkdir(parents=True, exist_ok=True)
-
-        with httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
-            resp.raise_for_status()
-            with open(binary, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-
-        binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        logger.info("MinIO installed to %s", binary)
-        return binary

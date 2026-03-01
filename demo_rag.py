@@ -5,7 +5,7 @@ AI + RAG Demo — Document-Grounded Q&A with Structured Extraction
 Upload financial documents, ask questions with RAG, extract structured
 data, and use tool calling — all through the clean AI class API.
 
-  1. Start MinIO + PG
+  1. Start object store + PG
   2. Upload financial documents (auto-chunk + embed)
   3. Search three ways: full-text, semantic, hybrid
   4. RAG: ask questions grounded in documents
@@ -22,6 +22,7 @@ Usage:
 import asyncio
 import logging
 import os
+import tempfile
 import textwrap
 
 logging.basicConfig(
@@ -54,7 +55,7 @@ def run_demo():
     from store.admin import StoreServer
     from media.admin import MediaServer
 
-    store = StoreServer(data_dir="data/demo_rag_store")
+    store = StoreServer(data_dir=tempfile.mkdtemp(prefix="demo_rag_store_"))
     store.start()
     store.register_alias("demo-rag")
     store.provision_user("demo_user", "demo_pw")
@@ -67,7 +68,7 @@ def run_demo():
     bootstrap_chunks_schema(admin_conn, embedding_dim=768)
     admin_conn.close()
 
-    media_srv = MediaServer(data_dir="data/demo_rag_media", api_port=9062, console_port=9063)
+    media_srv = MediaServer(data_dir=tempfile.mkdtemp(prefix="demo_rag_s3_"), api_port=9062, console_port=9063)
     asyncio.run(media_srv.start())
     media_srv.register_alias("demo-rag")
 
@@ -317,7 +318,7 @@ def run_demo():
         print("\n  Shutting down...")
         ms.close()
         conn.close()
-        asyncio.run(media_srv.stop())
+        # object store cleanup handled by atexit
         store.stop()
         print("  Done.")
 

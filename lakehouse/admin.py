@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class LakehouseServer:
     """Manages the lakehouse infrastructure stack.
 
-    Wraps PG (zonkyio) + Lakekeeper + MinIO into a single class
+    Wraps PG (zonkyio) + Lakekeeper + object store into a single class
     with consistent ``start()`` / ``stop()`` / ``register_alias()`` API.
     """
 
@@ -41,28 +41,28 @@ class LakehouseServer:
         data_dir: str = "data/lakehouse",
         pg_port: int = 5488,
         lakekeeper_port: int = 8181,
-        minio_api_port: int = 9002,
-        minio_console_port: int = 9003,
+        s3_api_port: int = 9002,
+        s3_console_port: int = 9003,
         warehouse: str = "lakehouse",
         bucket: str = "lakehouse",
     ):
         self._data_dir = data_dir
         self._pg_port = pg_port
         self._lakekeeper_port = lakekeeper_port
-        self._minio_api_port = minio_api_port
-        self._minio_console_port = minio_console_port
+        self._s3_api_port = s3_api_port
+        self._s3_console_port = s3_console_port
         self._warehouse = warehouse
         self._bucket = bucket
         self._stack: _LakehouseStack | None = None
 
     async def start(self) -> "LakehouseServer":
-        """Start the full lakehouse stack (PG + Lakekeeper + MinIO)."""
+        """Start the full lakehouse stack (PG + Lakekeeper + object store)."""
         self._stack = await _start_lakehouse(
             data_dir=self._data_dir,
             pg_port=self._pg_port,
             lakekeeper_port=self._lakekeeper_port,
-            minio_api_port=self._minio_api_port,
-            minio_console_port=self._minio_console_port,
+            s3_api_port=self._s3_api_port,
+            s3_console_port=self._s3_console_port,
             warehouse=self._warehouse,
             bucket=self._bucket,
         )

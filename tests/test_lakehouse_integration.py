@@ -5,7 +5,7 @@ End-to-end tests using the real public API:
 
   StoreServer  →  connect()  →  Storable.save()
        ↓ (object_events)
-  SyncEngine  →  Iceberg (via Lakekeeper + MinIO)
+  SyncEngine  →  Iceberg (via Lakekeeper + S3 object store)
        ↓
   Lakehouse (DuckDB SQL)
 
@@ -73,7 +73,7 @@ def server():
 
 @pytest.fixture(scope="module")
 def stack():
-    """Start the lakehouse stack (Lakekeeper PG + Lakekeeper + MinIO)."""
+    """Start the lakehouse stack (PG + Lakekeeper + object store)."""
     from lakehouse.admin import LakehouseServer
     # Use /tmp to keep Unix socket path < 103 bytes (macOS limit)
     tmp_dir = tempfile.mkdtemp(prefix="tst_lh_", dir="/tmp")
@@ -218,7 +218,7 @@ def seeded_ticks(tsdb):
 
 @pytest.fixture(scope="module")
 def catalog(stack):
-    """PyIceberg REST catalog pointing at Lakekeeper + MinIO."""
+    """PyIceberg REST catalog pointing at Lakekeeper + S3 object store."""
     from lakehouse.admin import create_catalog
     return create_catalog(
         uri=stack.catalog_url,

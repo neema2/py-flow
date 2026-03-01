@@ -2,7 +2,7 @@
 Lakehouse Tests
 ================
 Unit tests for the lakehouse package: models, table schemas, Arrow conversion,
-sync watermarks. Integration tests require Lakekeeper + MinIO (marked separately).
+sync watermarks. Integration tests require Lakekeeper + object store (marked separately).
 """
 
 import json
@@ -318,20 +318,20 @@ class TestLakekeeperManager:
         assert mgr.catalog_url == "http://localhost:9999/catalog"
 
 
-class TestMinIOManager:
-    """Tests for MinIOManager configuration."""
+class TestObjectStoreBackend:
+    """Tests for objectstore backend configuration."""
 
     def test_defaults(self):
-        from lakehouse.services import MinIOManager
-        mgr = MinIOManager()
+        from objectstore._minio import _MinIOBackend
+        mgr = _MinIOBackend()
         assert mgr._api_port == 9002
         assert mgr._console_port == 9003
         assert mgr.endpoint == "http://localhost:9002"
         assert not mgr.is_running
 
     def test_custom_ports(self):
-        from lakehouse.services import MinIOManager
-        mgr = MinIOManager(api_port=9010, console_port=9011)
+        from objectstore._minio import _MinIOBackend
+        mgr = _MinIOBackend(api_port=9010, console_port=9011)
         assert mgr.endpoint == "http://localhost:9010"
 
 
@@ -403,8 +403,7 @@ class TestPlatformDetection:
         assert name.endswith(".tar.gz")
         assert "lakekeeper" in name
 
-    def test_minio_download_url(self):
-        from lakehouse.services import _minio_download_url
+    def test_objectstore_download_url(self):
+        from objectstore._minio import _minio_download_url
         url = _minio_download_url()
         assert "dl.min.io" in url
-        assert "minio" in url

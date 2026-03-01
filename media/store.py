@@ -4,7 +4,7 @@ MediaStore — User-facing API for unstructured data.
 Upload, download, search, and manage documents, images, audio, and video
 with full-text search and bi-temporal audit trail.
 
-All binary content is stored in MinIO S3. Metadata is stored as Document
+All binary content is stored in S3-compatible storage. Metadata is stored as Document
 Storable objects in PG with tsvector-indexed full-text search.
 """
 
@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
-from media.s3 import S3Client
+from objectstore import S3Client
 from media.models import (
     Document,
     bootstrap_search_schema,

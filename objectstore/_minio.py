@@ -1,6 +1,8 @@
 """
-Private MinIO manager for the media package.
-Copied from lakehouse/services.py to avoid cross-package dependency.
+Private MinIO backend for the objectstore package.
+
+This is the ONLY file in the codebase that knows about MinIO.
+All other code uses the ObjectStore ABC via objectstore.configure().
 """
 
 from __future__ import annotations
@@ -41,12 +43,15 @@ def _minio_download_url() -> str:
     return _MINIO_URLS[key]
 
 
-class MinIOManager:
-    """Manages MinIO binary lifecycle: download, start, create bucket, stop."""
+class _MinIOBackend:
+    """ObjectStore implementation backed by a local MinIO subprocess.
+
+    Do NOT instantiate directly — use ``objectstore.configure("minio", ...)``.
+    """
 
     def __init__(
         self,
-        data_dir: str = "data/media/minio",
+        data_dir: str = "data/objectstore",
         api_port: int = 9002,
         console_port: int = 9003,
         access_key: str = "minioadmin",
@@ -65,7 +70,7 @@ class MinIOManager:
 
     @property
     def endpoint(self) -> str:
-        return f"localhost:{self._api_port}"
+        return f"http://localhost:{self._api_port}"
 
     @property
     def access_key(self) -> str:
@@ -75,10 +80,13 @@ class MinIOManager:
     def secret_key(self) -> str:
         return self._secret_key
 
-    async def start(self) -> None:
-        """Download if needed, start MinIO, create default bucket."""
+    async def _start(self) -> None:
+        """Download if needed and start the MinIO process.
+
+        Called by ``objectstore.configure()`` — not part of the public API.
+        """
         if await self.health():
-            logger.info("MinIO already running on port %d", self._api_port)
+            logger.info("Object store already running on port %d", self._api_port)
             return
 
         binary = self._ensure_binary()
@@ -96,7 +104,7 @@ class MinIOManager:
             "--console-address", f":{self._console_port}",
         ]
 
-        logger.info("Starting MinIO on port %d...", self._api_port)
+        logger.info("Starting object store on port %d...", self._api_port)
         self._process = subprocess.Popen(
             cmd,
             env=env,
@@ -108,32 +116,35 @@ class MinIOManager:
             await asyncio.sleep(1)
             if await self.health():
                 logger.info(
-                    "MinIO started (API=%d, Console=%d)",
+                    "Object store started (API=%d, Console=%d)",
                     self._api_port, self._console_port,
                 )
                 return
             if self._process.poll() is not None:
                 stderr = self._process.stderr.read().decode() if self._process.stderr else ""
-                raise RuntimeError(f"MinIO exited during startup: {stderr[:500]}")
+                raise RuntimeError(f"Object store exited during startup: {stderr[:500]}")
 
-        raise RuntimeError(f"MinIO failed to start within 20s (port {self._api_port})")
+        raise RuntimeError(f"Object store failed to start within 20s (port {self._api_port})")
 
-    async def stop(self) -> None:
-        """Gracefully stop MinIO."""
+    def _stop(self) -> None:
+        """Synchronously stop the MinIO process.
+
+        Called by ``atexit`` — must be sync (no async in atexit handlers).
+        """
         if self._process and self._process.poll() is None:
-            logger.info("Stopping MinIO (pid=%d)", self._process.pid)
+            logger.info("Stopping object store (pid=%d)", self._process.pid)
             self._process.terminate()
             try:
                 self._process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                logger.warning("MinIO did not stop gracefully, killing")
+                logger.warning("Object store did not stop gracefully, killing")
                 self._process.kill()
                 self._process.wait(timeout=5)
-            logger.info("MinIO stopped")
+            logger.info("Object store stopped")
         self._process = None
 
     async def health(self) -> bool:
-        """Check MinIO health via /minio/health/live endpoint."""
+        """Check health via the /minio/health/live endpoint."""
         url = f"http://localhost:{self._api_port}/minio/health/live"
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
@@ -142,7 +153,7 @@ class MinIOManager:
         except Exception:
             return False
 
-    async def ensure_bucket(self, bucket: str = "media") -> None:
+    async def ensure_bucket(self, bucket: str) -> None:
         """Create a bucket if it doesn't exist."""
         try:
             from minio import Minio
@@ -154,11 +165,11 @@ class MinIOManager:
             )
             if not client.bucket_exists(bucket):
                 client.make_bucket(bucket)
-                logger.info("Created MinIO bucket '%s'", bucket)
+                logger.info("Created bucket '%s'", bucket)
             else:
-                logger.info("MinIO bucket '%s' already exists", bucket)
+                logger.info("Bucket '%s' already exists", bucket)
         except Exception as e:
-            logger.warning("Failed to ensure MinIO bucket '%s': %s", bucket, e)
+            logger.warning("Failed to ensure bucket '%s': %s", bucket, e)
 
     def _ensure_binary(self) -> Path:
         """Ensure MinIO binary is available, downloading if needed."""
@@ -167,7 +178,7 @@ class MinIOManager:
         if binary.exists() and os.access(binary, os.X_OK):
             return binary
 
-        logger.info("MinIO binary not found, downloading...")
+        logger.info("Object store binary not found, downloading...")
         url = _minio_download_url()
 
         bin_dir.mkdir(parents=True, exist_ok=True)
@@ -179,5 +190,5 @@ class MinIOManager:
                     f.write(chunk)
 
         binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        logger.info("MinIO installed to %s", binary)
+        logger.info("Object store binary installed to %s", binary)
         return binary

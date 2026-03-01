@@ -2,7 +2,7 @@
 Document Model — Storable type for unstructured data metadata.
 
 Documents are stored as:
-  - Binary content → MinIO S3 (media bucket)
+  - Binary content → S3-compatible storage (media bucket)
   - Metadata → PG object_events (via Storable)
   - Search index → PG document_search (tsvector + GIN)
 
@@ -29,7 +29,7 @@ class Document(Storable):
     """
     Metadata for an unstructured data file stored in S3.
 
-    The actual binary content lives in MinIO at s3://{s3_bucket}/{s3_key}.
+    The actual binary content lives in S3 at s3://{s3_bucket}/{s3_key}.
     This Storable holds all searchable metadata and extracted text.
     """
     title: str = ""

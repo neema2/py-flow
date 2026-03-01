@@ -4,7 +4,7 @@ Lakehouse Ingest & Transform Demo
 ===================================
 Demonstrates all 4 write modes and transform capabilities of the Lakehouse class.
 
-  1. Start lakehouse stack (Lakekeeper + MinIO)
+  1. Start lakehouse stack (Lakekeeper + object store)
   2. Ingest data in all 4 modes: append, snapshot, incremental, bitemporal
   3. Run transforms (SQL → Iceberg)
   4. Query and display results
@@ -15,6 +15,7 @@ Usage:
 
 import asyncio
 import logging
+import tempfile
 import time
 
 logging.basicConfig(
@@ -60,7 +61,7 @@ async def run_demo():
     section("Starting lakehouse stack")
     from lakehouse.admin import LakehouseServer
 
-    server = LakehouseServer(data_dir="data/demo_ingest")
+    server = LakehouseServer(data_dir=tempfile.mkdtemp(prefix="dm_ing_", dir="/tmp"))
     await server.start()
     server.register_alias("demo")
     print(f"  Catalog: {server.catalog_url}")
@@ -235,7 +236,7 @@ async def run_demo():
         print("  Stack is running. Try:")
         print()
         print("    from lakehouse import Lakehouse")
-        print(f"    lh = Lakehouse(catalog_uri='{stack.catalog_url}', s3_endpoint='{stack.s3_endpoint}')")
+        print(f"    lh = Lakehouse(catalog_uri='{server.catalog_url}', s3_endpoint='{server.s3_endpoint}')")
         print("    lh.query('SELECT * FROM lakehouse.default.trades WHERE _is_current = true')")
         print()
         print("  Press Ctrl+C to stop.")

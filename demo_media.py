@@ -5,7 +5,7 @@ Media Store Demo — Unstructured Data Storage & Search
 Upload documents, extract text, full-text search, download — all with
 bi-temporal audit trail and RLS access control.
 
-  1. Start MinIO + PG
+  1. Start object store + PG
   2. Upload text, markdown, HTML, and binary files
   3. Full-text search with ranking
   4. Download and verify
@@ -18,10 +18,10 @@ Usage:
 
 import asyncio
 import logging
+import tempfile
 import textwrap
 
-logging.basicConfig(
-    level=logging.INFO,
+logging.basicConfig(level=logging.WARNING,
     format="%(asctime)s %(levelname)-5s %(name)s — %(message)s",
     datefmt="%H:%M:%S",
 )
@@ -41,7 +41,7 @@ def run_demo():
     print("=" * 70)
 
     # ── Start infrastructure ──────────────────────────────────────────
-    section("Starting MinIO + PG")
+    section("Starting object store + PG")
 
     from store.server import StoreServer
     from store.connection import connect
@@ -49,7 +49,7 @@ def run_demo():
     from media.models import bootstrap_search_schema
 
     # PG for Storable metadata
-    server = StoreServer(data_dir="data/demo_media_store")
+    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="demo_media_store_"))
     server.start()
     server.provision_user("demo_user", "demo_pw")
 
@@ -58,8 +58,8 @@ def run_demo():
     bootstrap_search_schema(admin_conn)
     admin_conn.close()
 
-    # MinIO for binary storage
-    media_srv = MediaServer(data_dir="data/demo_media", api_port=9022, console_port=9023)
+    # S3 object store for binary storage
+    media_srv = MediaServer(data_dir=tempfile.mkdtemp(prefix="demo_media_s3_"), api_port=9022, console_port=9023)
     asyncio.run(media_srv.start())
 
     # Connect as demo_user
@@ -68,7 +68,7 @@ def run_demo():
                    dbname=info["dbname"], password="demo_pw")
 
     print(f"  PG:    {info['host']}:{info['port']}")
-    print(f"  MinIO: {media_srv.endpoint}")
+    print(f"  S3:    {media_srv.endpoint}")
 
     # ── Create MediaStore ─────────────────────────────────────────────
     from media import MediaStore
@@ -219,7 +219,7 @@ def run_demo():
         print("\n  Shutting down...")
         ms.close()
         conn.close()
-        asyncio.run(media_srv.stop())
+        # object store cleanup handled by atexit
         server.stop()
         print("  Done.")
 

@@ -101,15 +101,17 @@ def pg_server():
 
 
 @pytest.fixture(scope="module")
-def minio_manager():
-    from lakehouse.services import MinIOManager
+def s3_server():
+    import objectstore
     import tempfile
-    minio = MinIOManager(data_dir=tempfile.mkdtemp(prefix="test_ai_client_minio_"), api_port=9052, console_port=9053)
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(minio.start())
-    yield minio
-    loop.run_until_complete(minio.stop())
-    loop.close()
+    store = loop.run_until_complete(objectstore.configure(
+        "minio",
+        data_dir=tempfile.mkdtemp(prefix="test_ai_client_s3_"),
+        api_port=9052, console_port=9053,
+    ))
+    yield store
+    # atexit handles cleanup
 
 
 @pytest.fixture(scope="module")
@@ -123,7 +125,7 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store(ai_client, minio_manager, store_conn):
+def media_store(ai_client, s3_server, store_conn):
     from media import MediaStore
 
     ms = MediaStore(

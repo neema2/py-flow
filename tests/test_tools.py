@@ -1,5 +1,5 @@
 """
-Integration tests for platform tools — real PG + MinIO + Gemini.
+Integration tests for platform tools — real PG + S3 object store + Gemini.
 
 Tests tool registry, built-in search tools, and LLM → tool execution loop.
 """
@@ -42,15 +42,17 @@ def pg_server():
 
 
 @pytest.fixture(scope="module")
-def minio_manager():
-    from lakehouse.services import MinIOManager
+def s3_server():
+    import objectstore
     import tempfile
-    minio = MinIOManager(data_dir=tempfile.mkdtemp(prefix="test_tools_minio_"), api_port=9032, console_port=9033)
     loop = asyncio.new_event_loop()
-    loop.run_until_complete(minio.start())
-    yield minio
-    loop.run_until_complete(minio.stop())
-    loop.close()
+    store = loop.run_until_complete(objectstore.configure(
+        "minio",
+        data_dir=tempfile.mkdtemp(prefix="test_tools_s3_"),
+        api_port=9032, console_port=9033,
+    ))
+    yield store
+    # atexit handles cleanup
 
 
 @pytest.fixture(scope="module")
@@ -64,7 +66,7 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store(minio_manager, store_conn):
+def media_store(s3_server, store_conn):
     if not GEMINI_API_KEY:
         pytest.skip("GEMINI_API_KEY not set")
 

@@ -2,7 +2,7 @@
 S3 Client — Thin wrapper around the minio Python SDK.
 
 Handles upload, download, delete, and presigned URL generation
-for binary files stored in MinIO (S3-compatible).
+for binary files stored in any S3-compatible backend.
 """
 
 from __future__ import annotations
@@ -17,16 +17,14 @@ from minio.error import S3Error
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BUCKET = "media"
-
 
 class S3Client:
     """
-    MinIO/S3 client for binary file storage.
+    S3-compatible client for binary file storage.
 
     Usage::
 
-        s3 = S3Client(endpoint="localhost:9002", access_key="minioadmin", secret_key="minioadmin")
+        s3 = S3Client(endpoint="localhost:9002", access_key="admin", secret_key="admin")
         s3.upload("docs/report.pdf", data, "application/pdf")
         data = s3.download("docs/report.pdf")
         url = s3.presign_url("docs/report.pdf")
@@ -38,7 +36,7 @@ class S3Client:
         endpoint: str = "localhost:9002",
         access_key: str = "minioadmin",
         secret_key: str = "minioadmin",
-        bucket: str = DEFAULT_BUCKET,
+        bucket: str = "data",
         secure: bool = False,
     ):
         self._endpoint = endpoint.replace("http://", "").replace("https://", "")

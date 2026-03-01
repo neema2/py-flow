@@ -72,10 +72,10 @@ class Lakehouse:
 
         self._catalog_uri = resolved.get("catalog_url") or os.environ.get("LAKEKEEPER_URI", DEFAULT_CATALOG_URI)
         self._warehouse = warehouse or resolved.get("warehouse") or os.environ.get("LAKEHOUSE_WAREHOUSE", DEFAULT_WAREHOUSE)
-        self._s3_endpoint = s3_endpoint or resolved.get("s3_endpoint") or os.environ.get("MINIO_ENDPOINT", DEFAULT_S3_ENDPOINT)
-        self._s3_access_key = s3_access_key or resolved.get("s3_access_key") or os.environ.get("MINIO_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
-        self._s3_secret_key = s3_secret_key or resolved.get("s3_secret_key") or os.environ.get("MINIO_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
-        self._s3_region = s3_region or resolved.get("s3_region") or os.environ.get("MINIO_REGION", DEFAULT_S3_REGION)
+        self._s3_endpoint = s3_endpoint or resolved.get("s3_endpoint") or os.environ.get("S3_ENDPOINT", DEFAULT_S3_ENDPOINT)
+        self._s3_access_key = s3_access_key or resolved.get("s3_access_key") or os.environ.get("S3_ACCESS_KEY", DEFAULT_S3_ACCESS_KEY)
+        self._s3_secret_key = s3_secret_key or resolved.get("s3_secret_key") or os.environ.get("S3_SECRET_KEY", DEFAULT_S3_SECRET_KEY)
+        self._s3_region = s3_region or resolved.get("s3_region") or os.environ.get("S3_REGION", DEFAULT_S3_REGION)
         self._namespace = namespace or resolved.get("namespace", "default")
         self._conn: Optional[duckdb.DuckDBPyConnection] = None
 
@@ -106,7 +106,7 @@ class Lakehouse:
         self._conn.execute("INSTALL iceberg; LOAD iceberg;")
         self._conn.execute("INSTALL httpfs; LOAD httpfs;")
 
-        # Configure S3 credentials for MinIO
+        # Configure S3 credentials
         self._conn.execute(f"SET s3_endpoint='{self._s3_endpoint.replace('http://', '')}';")
         self._conn.execute(f"SET s3_access_key_id='{self._s3_access_key}';")
         self._conn.execute(f"SET s3_secret_access_key='{self._s3_secret_key}';")
