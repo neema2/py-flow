@@ -100,7 +100,7 @@ def _snapshot_state(dc) -> dict:
 # ── Tree builder ──────────────────────────────────────────────────
 
 
-MAX_CHILDREN = 200  # limit expanded children to keep UI responsive
+MAX_CHILDREN = 200  # limit leaf rows per expansion to keep UI responsive
 
 
 def _pad_table(table: pa.Table, target_cols: list[str], target_schema: pa.Schema) -> pa.Table:
@@ -111,86 +111,108 @@ def _pad_table(table: pa.Table, target_cols: list[str], target_schema: pa.Schema
         if col_name in table.column_names:
             arrays[col_name] = table.column(col_name)
         else:
-            # Add null column with the right type from target schema
             field = target_schema.field(col_name)
             arrays[col_name] = pa.nulls(n, type=field.type)
     return pa.table(arrays)
 
 
-def _build_tree_result(dc, expanded_keys: set) -> pa.Table:
-    """Build a combined Arrow table: grouped parents + expanded children interleaved.
+def _get_source_schema(dc) -> pa.Schema:
+    """Get the normalized Arrow schema for the ungrouped source — LIMIT 0, no data."""
+    base_dc = dc.set_group_by().set_limit(0)
+    return _normalize_arrow(base_dc.query()).schema
 
-    Uses Arrow-native operations to preserve types (datetimes, etc.).
-    Adds ``__tree__`` and ``__depth__`` columns.
+
+def _build_tree_result(dc, expanded_keys: set, source_schema: pa.Schema) -> pa.Table:
+    """Build a hierarchical tree table with LAZY recursive expansion.
+
+    Only queries levels that are actually expanded — unexpanded branches
+    cost zero queries.  Each expanded node triggers exactly one
+    ``GROUP BY next_field WHERE parent_filters`` query.
+
+    With ``group_by(sector, symbol)``:
+    - Level 0: ``GROUP BY sector`` — always queried (top-level groups)
+    - Expand "Tech" → ``GROUP BY symbol WHERE sector='Tech'``
+    - Expand "AAPL" → leaf rows ``WHERE sector='Tech' AND symbol='AAPL' LIMIT 200``
 
     Args:
         dc: Datacube with group_by already set.
-        expanded_keys: set of tuples like {("Tech",), ("Finance",)}.
+        expanded_keys: set of tuples — key length encodes depth.
+        source_schema: pre-computed schema from ``_get_source_schema()``.
 
     Returns:
         Arrow table with __tree__, __depth__, then original source columns.
     """
     snap = dc.snapshot
     group_fields = list(snap.group_by)
+    base_dc = dc.set_group_by()  # clear group_by for sub-level queries
 
-    parents = _normalize_arrow(dc.query())
-    base_dc = dc.set_group_by()  # clear group_by
-
-    # Get source column names in original order (from the ungrouped schema)
-    source_schema = _normalize_arrow(base_dc.query().slice(0, 0)).schema
     source_cols = [f.name for f in source_schema]
 
-    # Target column order
+    # Target column order and schema
     all_cols = ["__tree__", "__depth__"] + source_cols
-
-    # Build target schema (superset of parent + child columns)
     fields = [pa.field("__tree__", pa.string()), pa.field("__depth__", pa.float64())]
     for col_name in source_cols:
         fields.append(source_schema.field(col_name))
     target_schema = pa.schema(fields)
 
-    # Build list of table chunks to concat
-    chunks = []
+    chunks: list[pa.Table] = []
+    indent = "\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0"  # 6 non-breaking spaces per level (Perspective trims regular spaces)
 
-    for i in range(parents.num_rows):
-        group_key = tuple(parents.column(f)[i].as_py() for f in group_fields)
-        is_expanded = group_key in expanded_keys
-        label = " / ".join(str(v) for v in group_key)
-        prefix = "▾ " if is_expanded else "▸ "
+    def _emit_leaves(parent_filters: list[tuple[str, object]], depth: int):
+        """Fetch and emit leaf rows (no more group fields to expand)."""
+        leaf_dc = base_dc.set_limit(MAX_CHILDREN)
+        for f, v in parent_filters:
+            leaf_dc = leaf_dc.add_filter(f, "eq", v)
+        leaves = _normalize_arrow(leaf_dc.query())
+        if leaves.num_rows == 0:
+            return
+        labels = [f"{indent * depth}row {j}" for j in range(leaves.num_rows)]
+        tree_arr = pa.array(labels, type=pa.string())
+        depth_arr = pa.array([float(depth)] * leaves.num_rows, type=pa.float64())
+        leaf_block = leaves.append_column("__tree__", tree_arr).append_column("__depth__", depth_arr)
+        for pf, pv in parent_filters:
+            if pf not in leaf_block.column_names:
+                leaf_block = leaf_block.append_column(
+                    pf, pa.array([pv] * leaves.num_rows, type=pa.string()))
+        chunks.append(_pad_table(leaf_block, all_cols, target_schema))
 
-        # Single parent row — slice(i, i+1) preserves Arrow types
-        parent_slice = parents.slice(i, 1)
-        tree_col = pa.array([prefix + label], type=pa.string())
-        depth_col = pa.array([0.0], type=pa.float64())
-        parent_row = parent_slice.append_column("__tree__", tree_col).append_column("__depth__", depth_col)
-        parent_row = _pad_table(parent_row, all_cols, target_schema)
-        chunks.append(parent_row)
+    def _build_level(depth: int, parent_filters: list[tuple[str, object]]):
+        """Lazily build tree rows — only query levels with expanded parents."""
+        if depth >= len(group_fields):
+            _emit_leaves(parent_filters, depth)
+            return
 
-        if is_expanded:
-            child_dc = base_dc
-            for f, v in zip(group_fields, group_key):
-                child_dc = child_dc.add_filter(f, "eq", v)
-            children = _normalize_arrow(child_dc.query().slice(0, MAX_CHILDREN))
-            if children.num_rows > 0:
-                # Build tree labels from first string dimension not in group_fields
-                labels = []
-                label_col = None
-                for col_name in children.column_names:
-                    if col_name not in group_fields and children.schema.field(col_name).type == pa.string():
-                        label_col = col_name
-                        break
-                for j in range(children.num_rows):
-                    if label_col:
-                        val = children.column(label_col)[j].as_py()
-                        labels.append(f"    {val}" if val else f"    row {j}")
-                    else:
-                        labels.append(f"    row {j}")
+        # Query THIS level: GROUP BY current_field + parent filters
+        current_field = group_fields[depth]
+        level_dc = base_dc.set_group_by(current_field)
+        for f, v in parent_filters:
+            level_dc = level_dc.add_filter(f, "eq", v)
+        parents = _normalize_arrow(level_dc.query())
 
-                tree_arr = pa.array(labels, type=pa.string())
-                depth_arr = pa.array([1.0] * children.num_rows, type=pa.float64())
-                child_block = children.append_column("__tree__", tree_arr).append_column("__depth__", depth_arr)
-                child_block = _pad_table(child_block, all_cols, target_schema)
-                chunks.append(child_block)
+        for i in range(parents.num_rows):
+            row_value = parents.column(current_field)[i].as_py()
+            key = tuple(v for _, v in parent_filters) + (row_value,)
+            is_expanded = key in expanded_keys
+
+            prefix = "▾ " if is_expanded else "▸ "
+            label = f"{indent * depth}{prefix}{row_value}"
+
+            # Emit parent row
+            parent_slice = parents.slice(i, 1)
+            tree_col = pa.array([label], type=pa.string())
+            depth_col = pa.array([float(depth)], type=pa.float64())
+            parent_row = parent_slice.append_column("__tree__", tree_col).append_column("__depth__", depth_col)
+            for pf, pv in parent_filters:
+                if pf not in parent_row.column_names:
+                    parent_row = parent_row.append_column(
+                        pf, pa.array([pv], type=pa.string()))
+            chunks.append(_pad_table(parent_row, all_cols, target_schema))
+
+            # LAZY: only recurse into children if this node is expanded
+            if is_expanded:
+                _build_level(depth + 1, parent_filters + [(current_field, row_value)])
+
+    _build_level(0, [])
 
     if not chunks:
         return pa.table({f.name: pa.array([], type=f.type) for f in target_schema})
@@ -208,8 +230,42 @@ class CmdHandler(tornado.websocket.WebSocketHandler):
         return True
 
     def open(self):
-        logger.info("Command channel opened")
-        self._refresh()
+        logger.info("Command channel opened — full reset to initial state")
+        state = self.application.dc_state
+        dc = state["initial"]
+        state["dc"] = dc
+        state["expanded"] = set()
+
+        # Reset to flat data — replace existing dc_0 content (don't recreate)
+        arrow = _normalize_arrow(dc.query())
+        ipc = _arrow_to_ipc(arrow)
+        new_cols = sorted(arrow.column_names)
+        old_cols = state["last_columns"]
+
+        if new_cols != old_cols:
+            # Schema changed (was grouped, now flat) — need new versioned table
+            state["table_version"] += 1
+            name = f"dc_{state['table_version']}"
+            state["psp_table"] = state["psp_client"].table(ipc, name=name)
+            state["last_columns"] = new_cols
+            self.write_message(json.dumps({
+                "type": "reload",
+                "table_name": name,
+                "state": _snapshot_state(dc),
+                "sql": dc.sql(),
+                "row_count": arrow.num_rows,
+                "expanded": [],
+            }))
+        else:
+            # Same schema — just replace data in current table
+            state["psp_table"].replace(ipc)
+            self.write_message(json.dumps({
+                "type": "update",
+                "state": _snapshot_state(dc),
+                "sql": dc.sql(),
+                "row_count": arrow.num_rows,
+                "expanded": [],
+            }))
 
     def on_message(self, message):
         try:
@@ -242,12 +298,18 @@ class CmdHandler(tornado.websocket.WebSocketHandler):
                     *[(s["field"], s.get("descending", False)) for s in sorts],
                 )
             elif cmd == "expand":
-                # Toggle expansion of a group row
-                group_fields = list(dc.snapshot.group_by)
-                key = tuple(msg.get(f) for f in group_fields)
+                # Toggle expansion of a group row.
+                # key is an array of values, length = depth + 1.
+                # e.g. ["Tech"] for depth 0, ["Tech", "AAPL"] for depth 1.
+                key = tuple(msg.get("key", []))
+                if not key:
+                    self.write_message(json.dumps({"error": "expand requires key"}))
+                    return
                 expanded = state["expanded"]
                 if key in expanded:
-                    expanded.discard(key)
+                    # Collapse: remove this key AND all descendants
+                    to_remove = {k for k in expanded if k[:len(key)] == key}
+                    expanded -= to_remove
                 else:
                     expanded.add(key)
                 # Don't change dc, just re-render
@@ -280,7 +342,10 @@ class CmdHandler(tornado.websocket.WebSocketHandler):
 
             # If group_by is active, build tree with expanded rows
             if dc.snapshot.group_by:
-                arrow = _build_tree_result(dc, expanded)
+                # Cache source schema (LIMIT 0) — only re-query on source change
+                if "source_schema" not in state:
+                    state["source_schema"] = _get_source_schema(dc)
+                arrow = _build_tree_result(dc, expanded, state["source_schema"])
             else:
                 arrow = _normalize_arrow(dc.query())
 
@@ -368,6 +433,7 @@ def run(dc, port: int = 8050, open_browser: bool = True):
         "last_columns": sorted(_normalize_arrow(arrow).column_names),
         "table_version": 0,
         "expanded": set(),
+        "source_schema": _normalize_arrow(arrow).schema,  # cached, LIMIT 0 not needed here
     }
 
     app.listen(port)

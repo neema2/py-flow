@@ -105,6 +105,72 @@
             margin-left: auto;
         }
 
+        /* Ordered pill list for group-by / pivot-by */
+        .pill-list {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            margin-bottom: 6px;
+        }
+
+        .pill-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: #0f3460;
+            border: 1px solid #e94560;
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-size: 11px;
+        }
+
+        .pill-item .pill-num {
+            color: #e94560;
+            font-weight: 700;
+            font-size: 10px;
+            min-width: 14px;
+        }
+
+        .pill-item .pill-name {
+            flex: 1;
+            color: #e0e0e0;
+        }
+
+        .pill-item .pill-btn {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 11px;
+            padding: 0 2px;
+            line-height: 1;
+        }
+
+        .pill-item .pill-btn:hover {
+            color: #e94560;
+        }
+
+        .avail-dims {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .avail-dim {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 3px;
+            padding: 2px 6px;
+            font-size: 11px;
+            color: #aaa;
+            cursor: pointer;
+        }
+
+        .avail-dim:hover {
+            border-color: #e94560;
+            color: #e0e0e0;
+        }
+
         /* Aggregation dropdowns */
         .agg-group {
             display: flex;
@@ -238,22 +304,24 @@
     <div id="sidebar">
         <h1>&#9671; Datacube</h1>
 
-        <!-- Group By -->
+        <!-- Group By (ordered) -->
         <div class="section">
             <div class="section-header">
                 Group By
                 <span class="badge" id="group-by-count">0</span>
             </div>
-            <div class="checkbox-group" id="group-by-list"></div>
+            <div class="pill-list" id="group-by-pills"></div>
+            <div class="avail-dims" id="group-by-avail"></div>
         </div>
 
-        <!-- Pivot By -->
+        <!-- Pivot By (ordered) -->
         <div class="section">
             <div class="section-header">
                 Pivot By
                 <span class="badge" id="pivot-by-count">0</span>
             </div>
-            <div class="checkbox-group" id="pivot-by-list"></div>
+            <div class="pill-list" id="pivot-by-pills"></div>
+            <div class="avail-dims" id="pivot-by-avail"></div>
         </div>
 
         <!-- Aggregation -->
@@ -378,50 +446,77 @@
             renderDrill();
         }
 
-        // Group By
+        // Group By (ordered pill list)
         function renderGroupBy() {
-            const container = document.getElementById("group-by-list");
-            const selected = new Set(state.group_by);
-            document.getElementById("group-by-count").textContent = selected.size;
-
-            container.innerHTML = dimensions().map(c => `
-                <label>
-                    <input type="checkbox" value="${c.name}"
-                           ${selected.has(c.name) ? "checked" : ""} />
-                    ${c.name}
-                    <span class="dim-tag">${c.type}</span>
-                </label>
-            `).join("");
-
-            container.querySelectorAll("input").forEach(cb => {
-                cb.addEventListener("change", () => {
-                    const fields = [...container.querySelectorAll("input:checked")]
-                        .map(el => el.value);
-                    send({ cmd: "group_by", fields });
-                });
-            });
+            const fields = state.group_by;  // already ordered
+            document.getElementById("group-by-count").textContent = fields.length;
+            renderOrderedPills("group-by-pills", "group-by-avail", fields, "group_by");
         }
 
-        // Pivot By
+        // Pivot By (ordered pill list)
         function renderPivotBy() {
-            const container = document.getElementById("pivot-by-list");
-            const selected = new Set(state.pivot_by);
-            document.getElementById("pivot-by-count").textContent = selected.size;
+            const fields = state.pivot_by;
+            document.getElementById("pivot-by-count").textContent = fields.length;
+            renderOrderedPills("pivot-by-pills", "pivot-by-avail", fields, "pivot_by");
+        }
 
-            container.innerHTML = dimensions().map(c => `
-                <label>
-                    <input type="checkbox" value="${c.name}"
-                           ${selected.has(c.name) ? "checked" : ""} />
-                    ${c.name}
-                    <span class="dim-tag">${c.type}</span>
-                </label>
+        function renderOrderedPills(pillsId, availId, currentFields, cmd) {
+            const pillsEl = document.getElementById(pillsId);
+            const availEl = document.getElementById(availId);
+            const selectedSet = new Set(currentFields);
+            const dims = dimensions();
+
+            // Active pills (numbered, with reorder + remove)
+            pillsEl.innerHTML = currentFields.map((name, idx) => `
+                <div class="pill-item" data-name="${name}">
+                    <span class="pill-num">${idx + 1}</span>
+                    <span class="pill-name">${name}</span>
+                    ${idx > 0 ? `<button class="pill-btn pill-up" data-idx="${idx}" title="Move up">&#9650;</button>` : ""}
+                    ${idx < currentFields.length - 1 ? `<button class="pill-btn pill-down" data-idx="${idx}" title="Move down">&#9660;</button>` : ""}
+                    <button class="pill-btn pill-remove" data-idx="${idx}" title="Remove">&#10005;</button>
+                </div>
             `).join("");
 
-            container.querySelectorAll("input").forEach(cb => {
-                cb.addEventListener("change", () => {
-                    const fields = [...container.querySelectorAll("input:checked")]
-                        .map(el => el.value);
-                    send({ cmd: "pivot_by", fields });
+            // Available dimensions (not yet selected)
+            const available = dims.filter(c => !selectedSet.has(c.name));
+            availEl.innerHTML = available.map(c =>
+                `<span class="avail-dim" data-name="${c.name}">${c.name}</span>`
+            ).join("");
+
+            // Event: click available dim → add to end
+            availEl.querySelectorAll(".avail-dim").forEach(el => {
+                el.addEventListener("click", () => {
+                    send({ cmd, fields: [...currentFields, el.dataset.name] });
+                });
+            });
+
+            // Event: remove pill
+            pillsEl.querySelectorAll(".pill-remove").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    const newFields = [...currentFields];
+                    newFields.splice(idx, 1);
+                    send({ cmd, fields: newFields });
+                });
+            });
+
+            // Event: move up
+            pillsEl.querySelectorAll(".pill-up").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    const newFields = [...currentFields];
+                    [newFields[idx - 1], newFields[idx]] = [newFields[idx], newFields[idx - 1]];
+                    send({ cmd, fields: newFields });
+                });
+            });
+
+            // Event: move down
+            pillsEl.querySelectorAll(".pill-down").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const idx = parseInt(btn.dataset.idx);
+                    const newFields = [...currentFields];
+                    [newFields[idx], newFields[idx + 1]] = [newFields[idx + 1], newFields[idx]];
+                    send({ cmd, fields: newFields });
                 });
             });
         }
@@ -583,19 +678,23 @@
             const row = event.detail?.row;
             if (!row) return;
 
-            // Only expand group rows (depth 0), not child rows
-            if (row["__depth__"] !== 0) return;
+            const depth = row["__depth__"];
+            if (depth === undefined || depth === null) return;
 
-            // Build expand kwargs from group_by dimension values
-            const kwargs = {};
-            for (const dim of state.group_by) {
-                if (row[dim] !== undefined && row[dim] !== null) {
-                    kwargs[dim] = row[dim];
-                }
+            // Leaf rows (depth >= group_by.length) are not expandable
+            if (depth >= state.group_by.length) return;
+
+            // Build key array: values for group_by[0..depth] from the row
+            const key = [];
+            for (let i = 0; i <= depth; i++) {
+                const dim = state.group_by[i];
+                const val = row[dim];
+                if (val === undefined || val === null) return;  // missing value, can't expand
+                key.push(val);
             }
 
-            if (Object.keys(kwargs).length > 0) {
-                send({ cmd: "expand", ...kwargs });
+            if (key.length > 0) {
+                send({ cmd: "expand", key });
             }
         });
 
