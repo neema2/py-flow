@@ -99,19 +99,9 @@ class LiveTable:
 
     # -- helpers ----------------------------------------------------------
 
-    def _locked(self, fn, *args, **kwargs):
-        """Run *fn* under the UG shared lock and return the result."""
-        from deephaven.update_graph import shared_lock
-        from deephaven.execution_context import get_exec_ctx
-
-        ug = get_exec_ctx().update_graph
-        with shared_lock(ug):
-            return fn(*args, **kwargs)
-
     def _derive(self, fn, *args, **kwargs) -> LiveTable:
-        """Derive a new LiveTable by running *fn* under shared lock."""
-        result = self._locked(fn, *args, **kwargs)
-        return LiveTable(result)
+        """Derive a new LiveTable from this table."""
+        return LiveTable(fn(*args, **kwargs))
 
     # -- derivation (all auto-locked) -------------------------------------
 
