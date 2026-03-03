@@ -204,7 +204,7 @@ def create_dashboard_tools(ctx: _PlatformContext) -> list:
             "bridge_config": {
                 "code": (
                     f"bridge = StoreBridge('{ctx.store_alias}', "
-                    f"user='{ctx.store_user}', password='{ctx.store_password}')\n"
+                    f"user='{ctx._user}', password='{ctx._password}')\n"
                     f"bridge.register({type_name})\n"
                     f"bridge.start()\n"
                     f"live_table = bridge.table({type_name}).last_by('entity_id')"
@@ -359,7 +359,7 @@ def create_dashboard_tools(ctx: _PlatformContext) -> list:
         return json.dumps({
             "table_name": table_name,
             "published_as": pub_name,
-            "url": f"http://localhost:{ctx.streaming_port}" if ctx.streaming_port else "StreamingServer not configured",
+            "url": f"StreamingServer alias='{ctx._streaming_alias}'" if ctx._streaming_alias else "StreamingServer not configured",
             "code": f'table.publish("{pub_name}")',
             "message": f"Table will be visible as '{pub_name}' in the Deephaven web UI.",
         })

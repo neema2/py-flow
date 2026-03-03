@@ -1,16 +1,20 @@
 """
 Tests for the agents/ package — PlatformAgents.
 
-Three tiers:
+Four tiers:
 1. Codegen integration — define_module, execute_python, inspect_registry (tmp dirs)
 2. OLTP end-to-end   — real embedded Postgres via StoreServer
-3. Eval framework     — scoring math (pure Python)
+3. All-agent e2e     — every agent tool against real services
+4. Eval framework     — scoring math (pure Python)
 """
 
+import asyncio
 import dataclasses
 import json
 import os
 import tempfile
+import time
+import uuid
 
 import pytest
 
@@ -49,6 +53,10 @@ from agents._eval.datasets import (
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 requires_gemini = pytest.mark.skipif(not GEMINI_API_KEY, reason="GEMINI_API_KEY not set")
+
+
+# Unique suffix for lakehouse table isolation
+_UID = uuid.uuid4().hex[:8]
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -259,6 +267,73 @@ class TestOLTPCodegen:
         ))
 
 
+# ── Additional Service Fixtures ──────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def lakehouse_stack():
+    """Start the lakehouse stack (PG + Lakekeeper + S3 object store)."""
+    from lakehouse.admin import LakehouseServer
+    tmp_dir = tempfile.mkdtemp(prefix="tst_ag_lh_", dir="/tmp")
+    srv = LakehouseServer(data_dir=tmp_dir)
+    asyncio.run(srv.start())
+    srv.register_alias("agent_test")
+    yield srv
+    asyncio.run(srv.stop())
+
+
+@pytest.fixture(scope="module")
+def media_s3():
+    """Start S3-compatible object store for MediaStore."""
+    import objectstore
+    loop = asyncio.new_event_loop()
+    store = loop.run_until_complete(objectstore.configure(
+        "minio",
+        data_dir=tempfile.mkdtemp(prefix="tst_ag_s3_"),
+        api_port=9032,
+        console_port=9033,
+    ))
+    yield store
+
+
+@pytest.fixture(scope="module")
+def media_store_fixture(store_server, media_s3):
+    """MediaStore backed by real StoreServer + real MinIO."""
+    from media.models import bootstrap_search_schema
+    from media import MediaStore
+
+    # Bootstrap search schema
+    admin_conn = store_server.admin_conn()
+    bootstrap_search_schema(admin_conn)
+    admin_conn.close()
+
+    # Connect as user so MediaStore has a store connection
+    from store.connection import connect
+    info = store_server.conn_info()
+    conn = connect(host=info["host"], port=info["port"], dbname=info["dbname"],
+                   user="agent_user", password="agent_pw")
+
+    # Register media alias
+    from media._registry import register_alias as _register_media_alias
+    _register_media_alias(
+        "agent_test",
+        endpoint="localhost:9032",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+        bucket="test-agent-media",
+    )
+
+    ms = MediaStore(
+        s3_endpoint="localhost:9032",
+        s3_access_key="minioadmin",
+        s3_secret_key="minioadmin",
+        s3_bucket="test-agent-media",
+    )
+    yield ms
+    ms.close()
+    conn.close()
+
+
 # ── OLTP End-to-End (real Postgres) ──────────────────────────────────
 
 
@@ -318,6 +393,369 @@ class TestOLTPEndToEnd:
         query_fn = _get_tool(create_oltp_tools(ctx), "query_dataset")
         result = json.loads(query_fn(type_name="NonExistent"))
         assert "error" in result
+
+
+# ── Feed Agent E2E (real MarketDataServer) ───────────────────────────
+
+
+class TestFeedAgentE2E:
+    """Feed agent tools against the real MarketDataServer."""
+
+    def test_list_md_symbols(self, market_data_server):
+        from marketdata._registry import register_alias as _reg_md
+        _reg_md("agent_test", url=market_data_server.url, port=market_data_server.port)
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_feed_tools(ctx)
+        result = json.loads(_get_tool(tools, "list_md_symbols")())
+        assert "error" not in result
+        # SimulatorFeed produces equity + fx symbols
+        if isinstance(result, dict):
+            assert len(result) > 0
+        else:
+            assert len(result) > 0
+
+    def test_get_md_snapshot(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_feed_tools(ctx)
+        result = json.loads(_get_tool(tools, "get_md_snapshot")(msg_type="equity"))
+        assert "error" not in result
+
+    def test_get_feed_health(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_feed_tools(ctx)
+        result = json.loads(_get_tool(tools, "get_feed_health")())
+        assert "error" not in result
+
+    def test_publish_custom_tick(self, market_data_server):
+        from datetime import datetime, timezone
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_feed_tools(ctx)
+        tick = json.dumps({"type": "equity", "symbol": "TEST", "price": 99.99,
+                           "bid": 99.98, "ask": 100.00, "volume": 1000,
+                           "change": 0.5, "change_pct": 0.5,
+                           "timestamp": datetime.now(timezone.utc).isoformat()})
+        result = json.loads(_get_tool(tools, "publish_custom_tick")(tick_json=tick))
+        assert "error" not in result
+
+
+# ── Timeseries Agent E2E (real MarketDataServer + QuestDB) ───────────
+
+
+class TestTimeseriesAgentE2E:
+    """Timeseries agent tools against real MarketDataServer (embeds QuestDB)."""
+
+    def test_list_tsdb_series(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_timeseries_tools(ctx)
+        result = json.loads(_get_tool(tools, "list_tsdb_series")())
+        assert "error" not in result
+        assert "symbols" in result
+
+    def test_get_bars(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_timeseries_tools(ctx)
+        result = json.loads(_get_tool(tools, "get_bars")(msg_type="equity", symbol="AAPL", interval="1m"))
+        assert "error" not in result
+        assert result["bar_count"] > 0
+
+    def test_get_tick_history(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_timeseries_tools(ctx)
+        result = json.loads(_get_tool(tools, "get_tick_history")(msg_type="equity", symbol="AAPL", limit=50))
+        assert "error" not in result
+        assert result["tick_count"] > 0
+
+    def test_compute_realized_vol(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_timeseries_tools(ctx)
+        result = json.loads(_get_tool(tools, "compute_realized_vol")(symbol="AAPL", msg_type="equity", window=5))
+        # Might fail if not enough bars yet — check for either success or known error
+        if "error" not in result:
+            assert "annualized_vol" in result
+            assert result["annualized_vol"] >= 0
+        else:
+            assert "Not enough" in result["error"]
+
+    def test_compare_cross_exchange(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_timeseries_tools(ctx)
+        result = json.loads(_get_tool(tools, "compare_cross_exchange")(symbol="AAPL", msg_type="equity"))
+        assert "error" not in result
+        assert result["sources_compared"] >= 1
+
+
+# ── Lakehouse Agent E2E (real LakehouseServer) ───────────────────────
+
+
+class TestLakehouseAgentE2E:
+    """Lakehouse agent tools against real Lakekeeper + MinIO + PG."""
+
+    def test_list_lakehouse_tables(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_lakehouse_tools(ctx)
+        result = json.loads(_get_tool(tools, "list_lakehouse_tables")())
+        assert "error" not in result
+        assert "tables" in result
+
+    def test_create_and_query_lakehouse_table(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_lakehouse_tools(ctx)
+        tbl = f"agent_test_{_UID}"
+
+        # Create table with inline SQL
+        create_fn = _get_tool(tools, "create_lakehouse_table")
+        result = json.loads(create_fn(
+            table_name=tbl,
+            sql=f"SELECT 'AAPL' as symbol, 228.5 as price, 100 as qty UNION ALL SELECT 'GOOGL', 192.3, 50",
+            mode="append",
+        ))
+        assert result.get("status") == "created", f"Create failed: {result}"
+        assert result["rows_written"] == 2
+
+        # Query back
+        query_fn = _get_tool(tools, "query_lakehouse")
+        qr = json.loads(query_fn(sql=f"SELECT * FROM lakehouse.default.{tbl}"))
+        assert qr["row_count"] == 2
+        symbols = {r["symbol"] for r in qr["rows"]}
+        assert symbols == {"AAPL", "GOOGL"}
+
+
+# ── Quant Agent E2E (real LakehouseServer + MarketDataServer) ────────
+
+
+class TestQuantAgentE2E:
+    """Quant/DataScience agent tools against real Lakehouse + MarketData."""
+
+    def test_run_sql_analysis(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        tbl = f"quant_test_{_UID}"
+
+        # Seed data directly via lakehouse
+        lh = ctx.lakehouse
+        lh.ingest(tbl, [
+            {"symbol": "AAPL", "price": 228.5, "volume": 1000},
+            {"symbol": "GOOGL", "price": 192.3, "volume": 2000},
+            {"symbol": "MSFT", "price": 415.0, "volume": 500},
+        ], mode="append")
+
+        result = json.loads(_get_tool(tools, "run_sql_analysis")(
+            sql=f"SELECT * FROM lakehouse.default.{tbl}",
+            description="Test analysis",
+        ))
+        assert "error" not in result
+        assert result["row_count"] == 3
+        assert "numeric_stats" in result
+        assert "price" in result["numeric_stats"]
+
+    def test_compute_statistics(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        tbl = f"quant_test_{_UID}"
+        result = json.loads(_get_tool(tools, "compute_statistics")(
+            sql=f"SELECT * FROM lakehouse.default.{tbl}",
+            columns="price,volume",
+        ))
+        assert "error" not in result
+        stats = result["statistics"]
+        assert "price" in stats
+        assert stats["price"]["count"] == 3
+
+    def test_detect_anomalies(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        tbl = f"quant_test_{_UID}"
+        result = json.loads(_get_tool(tools, "detect_anomalies")(
+            sql=f"SELECT * FROM lakehouse.default.{tbl}",
+            column="price",
+            method="zscore",
+            threshold=1.0,
+        ))
+        assert "error" not in result
+        assert result["total_rows"] == 3
+
+    def test_run_regression(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        tbl = f"quant_test_{_UID}"
+        result = json.loads(_get_tool(tools, "run_regression")(
+            sql=f"SELECT * FROM lakehouse.default.{tbl}",
+            target="price",
+            features="volume",
+        ))
+        assert "error" not in result
+        assert "r_squared" in result
+        assert "coefficients" in result
+
+    def test_time_series_decompose(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        result = json.loads(_get_tool(tools, "time_series_decompose")(
+            symbol="AAPL", msg_type="equity", interval="1m", window=5,
+        ))
+        if "error" not in result:
+            assert "trend_direction" in result
+        else:
+            assert "Need at least" in result["error"]
+
+    @requires_gemini
+    def test_suggest_visualization(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_datascience_tools(ctx)
+        result = _get_tool(tools, "suggest_visualization")(
+            data_description="3 columns: symbol (str), price (float), volume (int), 100 rows",
+            question="Show price distribution",
+        )
+        parsed = json.loads(result)
+        assert "chart_type" in parsed or "error" not in parsed
+
+
+# ── Document Agent E2E (real StoreServer + MinIO) ────────────────────
+
+
+class TestDocumentAgentE2E:
+    """Document agent tools against real StoreServer + S3."""
+
+    def test_upload_and_list(self, store_server, media_store_fixture, tmp_path):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        # Inject the real media store into ctx
+        ctx._media_store_instance = media_store_fixture
+        tools = create_document_tools(ctx)
+
+        # Create a test file
+        test_file = tmp_path / "test_doc.txt"
+        test_file.write_text("This is a test document about interest rate swaps and credit risk.")
+
+        # Upload
+        upload_fn = _get_tool(tools, "upload_document")
+        result = json.loads(upload_fn(
+            file_path=str(test_file),
+            title="Test IRS Document",
+            tags="research,risk",
+        ))
+        assert result.get("status") == "uploaded", f"Upload failed: {result}"
+        assert result["title"] == "Test IRS Document"
+
+        # List
+        list_fn = _get_tool(tools, "list_documents")
+        lr = json.loads(list_fn(limit=10))
+        assert lr["count"] >= 1
+
+    def test_search(self, store_server, media_store_fixture):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        ctx._media_store_instance = media_store_fixture
+        tools = create_document_tools(ctx)
+
+        search_fn = _get_tool(tools, "search_documents")
+        result = json.loads(search_fn(query="interest rate", mode="text", limit=5))
+        assert "error" not in result
+
+
+# ── Dashboard Agent E2E (real StreamingServer + StoreServer) ─────────
+
+
+class TestDashboardAgentE2E:
+    """Dashboard agent tools against real Deephaven + StoreServer."""
+
+    def test_list_ticking_tables(self, streaming_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_dashboard_tools(ctx)
+        result = json.loads(_get_tool(tools, "list_ticking_tables")())
+        assert "error" not in result
+        assert "tables" in result
+
+    def test_create_ticking_table(self, streaming_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_dashboard_tools(ctx)
+        schema = json.dumps({"symbol": "str", "price": "float", "volume": "int"})
+        result = json.loads(_get_tool(tools, "create_ticking_table")(
+            name="test_agent_tbl", schema_json=schema,
+        ))
+        assert result.get("status") == "created", f"Create failed: {result}"
+
+    def test_create_reactive_model(self, codegen_env):
+        ctx = _PlatformContext()
+        tools = create_dashboard_tools(ctx)
+        fields = json.dumps([{"name": "rm_symbol", "type": "str"}, {"name": "rm_price", "type": "float"}])
+        result = json.loads(_get_tool(tools, "create_reactive_model")(
+            name="TestRMModel", key_field="rm_symbol", fields_json=fields,
+        ))
+        assert result.get("status") == "created", f"Create failed: {result}"
+        assert result["persistent"] is True
+
+    def test_setup_store_bridge(self, store_server, codegen_env):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        # Register a type so setup_store_bridge can find it
+        create_fn = _get_tool(create_oltp_tools(ctx), "create_dataset")
+        fields = json.dumps([{"name": "br_symbol", "type": "str"}, {"name": "br_qty", "type": "int"}])
+        json.loads(create_fn(name="BridgeTest", fields_json=fields))
+
+        tools = create_dashboard_tools(ctx)
+        result = json.loads(_get_tool(tools, "setup_store_bridge")(type_name="BridgeTest"))
+        assert "error" not in result
+        assert "bridge_config" in result
+        assert "agent_user" in result["bridge_config"]["code"]
+
+
+# ── Query Agent E2E (cross-store) ────────────────────────────────────
+
+
+class TestQueryAgentE2E:
+    """Query agent tools — cross-store access."""
+
+    def test_query_store(self, store_server, codegen_env):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        # Create and seed a type
+        oltp_tools = create_oltp_tools(ctx)
+        create_fn = _get_tool(oltp_tools, "create_dataset")
+        fields = json.dumps([{"name": "qs_name", "type": "str"}, {"name": "qs_val", "type": "float"}])
+        json.loads(create_fn(name="QueryStoreTest", fields_json=fields))
+        insert_fn = _get_tool(oltp_tools, "insert_records")
+        json.loads(insert_fn(type_name="QueryStoreTest",
+                             records_json=json.dumps([{"qs_name": "A", "qs_val": 1.0}])))
+
+        # Now use query agent
+        tools = create_query_tools(ctx)
+        result = json.loads(_get_tool(tools, "query_store")(
+            type_name="QueryStoreTest", limit=10,
+        ))
+        assert "error" not in result
+        assert result["count"] >= 1
+
+    def test_list_all_datasets(self, store_server, codegen_env):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        # Register a type so oltp shows up
+        oltp_tools = create_oltp_tools(ctx)
+        create_fn = _get_tool(oltp_tools, "create_dataset")
+        fields = json.dumps([{"name": "ld_x", "type": "int"}])
+        json.loads(create_fn(name="ListDatasetTest", fields_json=fields))
+
+        tools = create_query_tools(ctx)
+        result = json.loads(_get_tool(tools, "list_all_datasets")())
+        assert "oltp" in result
+        assert len(result["oltp"]) >= 1
+
+    def test_describe_dataset(self, store_server, codegen_env):
+        ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
+        # Must have QueryStoreTest from above
+        tools = create_query_tools(ctx)
+        result = json.loads(_get_tool(tools, "describe_dataset")(name="QueryStoreTest"))
+        assert "error" not in result
+
+    def test_get_md_snapshot_via_query(self, market_data_server):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_query_tools(ctx)
+        result = json.loads(_get_tool(tools, "get_md_snapshot")(msg_type="equity"))
+        assert "error" not in result
+
+    def test_query_lakehouse_via_query(self, lakehouse_stack):
+        ctx = _PlatformContext(alias="agent_test")
+        tools = create_query_tools(ctx)
+        result = json.loads(_get_tool(tools, "query_lakehouse")(
+            sql=f"SELECT 1 as test_col",
+        ))
+        assert "error" not in result
+        assert result["row_count"] == 1
 
 
 # ── Eval Scoring (pure math) ─────────────────────────────────────────

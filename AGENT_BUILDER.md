@@ -109,7 +109,7 @@ Every data path uses the real public API:
 
 ```bash
 export GEMINI_API_KEY="your-key"
-python3 demo_agent_platform.py
+python3 demo_agent_builder.py
 ```
 
 Requires Java 17-21 for QuestDB (auto-detected on macOS via

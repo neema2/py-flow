@@ -940,11 +940,11 @@ response = ai.run_tool_loop("Find Basel III docs", tools=ai.search_tools(ms))
 
 ## Agents
 
-Tool-calling agents with conversation memory, multi-agent teams, and an eval framework — all built on the `AI` class. See [AGENT_DEMO.md](AGENT_DEMO.md) for the full platform demo architecture.
+Tool-calling agents with conversation memory, multi-agent teams, and an eval framework — all built on the `AI` class. See [AGENT_BUILDER.md](AGENT_BUILDER.md) for the agent builder framework docs.
 
 ```bash
 export GEMINI_API_KEY="your-key"
-python3 demo_agent_platform.py
+python3 demo_agent_builder.py
 ```
 
 ### Single Agent
@@ -1016,17 +1016,61 @@ runner.summary()   # pass rate, tool accuracy, avg latency
 
 14 public symbols: `AI`, `Message`, `LLMResponse`, `ToolCall`, `RAGResult`, `ExtractionResult`, `Tool`, `Agent`, `AgentResult`, `AgentStep`, `AgentTeam`, `EvalRunner`, `EvalCase`, `EvalResult`.
 
+### PlatformAgents — 8-Agent Data Engineering Team
+
+One import, one constructor — 8 specialist agents wired to every platform service. See [PLATFORM_AGENTS.md](PLATFORM_AGENTS.md) for full docs.
+
+```python
+from agents import PlatformAgents
+
+team = PlatformAgents(alias="demo", user="alice", password="pw")
+
+# LLM router auto-delegates to the right specialist
+result = team.run("Create a trades dataset, load it into the lakehouse, and compute statistics")
+
+# Or access agents directly
+result = team.oltp.run("Create a trades table with symbol, price, quantity")
+result = team.quant.run("Run a regression on lakehouse.default.trades")
+```
+
+| Agent | Specialty | Services |
+|-------|-----------|----------|
+| `oltp` | Operational datasets (create, insert, query) | StoreServer |
+| `feed` | Live market data feeds | MarketDataServer |
+| `timeseries` | OHLCV bars, tick history, realized vol | MarketDataServer (+QuestDB) |
+| `lakehouse` | Star schemas, ETL, Iceberg tables | LakehouseServer |
+| `quant` | Statistics, regression, anomaly detection | LakehouseServer + MarketDataServer + AI |
+| `document` | Upload, search, extract from documents | StoreServer + MediaServer |
+| `dashboard` | Ticking tables, StoreBridge, reactive models | StreamingServer + StoreServer |
+| `query` | Cross-store discovery and queries | All services |
+
 ---
 
 ## Demos
 
-### `demo_agent_platform.py` — Multi-Agent Finance Team
+### `demo_platform_agents.py` — PlatformAgents: 8-Agent Data Engineering Team
+
+All 8 PlatformAgents exercised against real services — OLTP, Feed, Timeseries, Lakehouse, Quant, Document, Dashboard, Query. Multi-agent routing demo at the end.
+
+```bash
+export GEMINI_API_KEY="your-key"
+python3 demo_platform_agents.py
+```
+
+| Feature | What it shows |
+|---------|---------------|
+| All 8 agents | Each agent runs real prompts against real services |
+| 5 services | StoreServer, MarketDataServer, LakehouseServer, MediaServer, StreamingServer |
+| Multi-agent routing | LLM router delegates complex queries to the right specialist |
+| Cross-store queries | Query agent discovers and accesses data across all stores |
+
+### `demo_agent_builder.py` — Multi-Agent Finance Team (Agent Builder Framework)
 
 Three AI agents collaborate on live portfolio risk analysis, powered by the full platform stack: **reactive graph → QuestDB TSDB → Lakehouse (Iceberg) → RAG**. Five services auto-start.
 
 ```bash
 export GEMINI_API_KEY="your-key"
-python3 demo_agent_platform.py
+python3 demo_agent_builder.py
 ```
 
 | Feature | What it shows |

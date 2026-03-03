@@ -655,6 +655,83 @@ See [TIMESERIES.md](TIMESERIES.md) for full details.
 
 ---
 
+## 13. Agents (PlatformAgents)
+
+**8 specialist AI agents orchestrated by an LLM router, each wired to real platform services.** See [PLATFORM_AGENTS.md](PLATFORM_AGENTS.md) for full docs.
+
+```python
+from agents import PlatformAgents
+```
+
+### Constructor
+
+```python
+PlatformAgents(
+    alias="",              # Default alias for all services
+    user="",               # Default user for authenticated services
+    password="",           # Default password
+    *,
+    store_alias=None,      # Override: object store alias
+    lakehouse_alias=None,  # Override: lakehouse alias
+    tsdb_alias=None,       # Override: TSDB alias
+    streaming_alias=None,  # Override: streaming server alias
+    md_alias=None,         # Override: market data alias
+    media_alias=None,      # Override: media store alias
+    ai=None,               # Pre-built AI instance
+    agents=None,           # Subset: ["oltp", "lakehouse", ...] (default: all 8)
+    temperature=0.5,       # Router LLM temperature
+    max_delegations=8,     # Max delegation rounds per run
+)
+```
+
+### Methods & Properties
+
+| Symbol | Kind | Description |
+|--------|------|-------------|
+| `PlatformAgents` | class | Multi-agent team — one constructor, 8 agents |
+| `.run(prompt)` | method | LLM router delegates to specialist agents |
+| `.oltp` | property | OLTP Dataset Agent |
+| `.lakehouse` | property | Lakehouse Curation Agent |
+| `.feed` | property | Market Data Feed Agent |
+| `.timeseries` | property | Time Series Agent |
+| `.document` | property | Document Agent |
+| `.dashboard` | property | Dashboard Agent |
+| `.query` | property | Query Agent (cross-store) |
+| `.quant` | property | Quant/DataScience Agent |
+
+### Per-Agent Tool Inventories
+
+**OLTP** (`create_oltp_tools`): `create_dataset`, `insert_records`, `query_dataset`, `list_storable_types`, `describe_type`, `ingest_from_file` + codegen tools
+
+**Feed** (`create_feed_tools`): `list_md_symbols`, `get_md_snapshot`, `get_feed_health`, `publish_custom_tick`, `describe_feed_setup`
+
+**Timeseries** (`create_timeseries_tools`): `list_tsdb_series`, `get_bars`, `get_tick_history`, `compute_realized_vol`, `compare_cross_exchange`, `ingest_historical_csv`
+
+**Lakehouse** (`create_lakehouse_tools`): `list_lakehouse_tables`, `describe_lakehouse_table`, `design_star_schema`, `create_lakehouse_table`, `ingest_to_lakehouse`, `build_datacube`, `query_lakehouse`
+
+**Quant** (`create_datascience_tools`): `run_sql_analysis`, `compute_statistics`, `compute_correlation`, `detect_anomalies`, `run_regression`, `time_series_decompose`, `suggest_visualization`
+
+**Document** (`create_document_tools`): `upload_document`, `list_documents`, `search_documents`, `extract_structured_data`, `bulk_upload`, `tag_document`
+
+**Dashboard** (`create_dashboard_tools`): `list_ticking_tables`, `create_ticking_table`, `create_derived_table`, `setup_store_bridge`, `create_reactive_model`, `publish_table` + codegen tools
+
+**Query** (`create_query_tools`): `query_store`, `query_lakehouse`, `get_md_snapshot`, `list_all_datasets`, `describe_dataset`, `search_documents`, `cross_store_query`
+
+### Eval Symbols
+
+| Symbol | Package | Description |
+|--------|---------|-------------|
+| `AgentEval` | `agents._eval.framework` | Multi-phase evaluator |
+| `EvalPhase` | `agents._eval.framework` | Enum: TOOL_SELECTION, EXECUTION, OUTPUT_QUALITY |
+| `AgentEvalCase` | `agents._eval.datasets` | Test case with expected tools and outputs |
+| `ALL_EVAL_CASES` | `agents._eval.datasets` | 20+ eval cases across all agents |
+| `OLTP_EVAL_CASES` | `agents._eval.datasets` | OLTP-specific eval cases |
+| `LAKEHOUSE_EVAL_CASES` | `agents._eval.datasets` | Lakehouse eval cases |
+| `QUERY_EVAL_CASES` | `agents._eval.datasets` | Query agent eval cases |
+| `DATASCIENCE_EVAL_CASES` | `agents._eval.datasets` | Quant agent eval cases |
+
+---
+
 ## Summary
 
 | Package | Symbols | Count |
@@ -669,4 +746,5 @@ See [TIMESERIES.md](TIMESERIES.md) for full details.
 | **media** | `MediaStore`, `Document` | 2 |
 | **ai** | `AI`, `Message`, `LLMResponse`, `ToolCall`, `RAGResult`, `ExtractionResult`, `Tool` | 7 |
 | **timeseries** | `TSDBBackend`, `TSDBConsumer`, `Timeseries`, `create_backend`, `Bar`, `HistoryQuery`, `BarQuery` | 7 |
-| **Total** | | **47** |
+| **agents** | `PlatformAgents` + 8 agent properties + eval symbols | 10+ |
+| **Total** | | **57+** |

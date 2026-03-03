@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Demo: Multi-Agent Finance Team — Full Platform Integration
-============================================================
+Demo: Agent Builder Framework — Custom Multi-Agent Finance Team
+=================================================================
 
-Three specialist agents collaborate using REAL platform services:
+Shows how to BUILD your own agents using the Agent/AgentTeam framework.
+Three custom specialist agents collaborate using REAL platform services:
 
   1. **Market Data Agent** — reads live prices from reactive Position graph
      (fed by MarketData server WebSocket → @computed market_value, unrealized_pnl),
@@ -27,7 +28,7 @@ The reactive graph does ALL the math. Agents just observe the results.
 Usage::
 
     export GEMINI_API_KEY="your-key"
-    python3 demo_agent_platform.py
+    python3 demo_agent_builder.py
 """
 
 import asyncio
