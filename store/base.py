@@ -21,7 +21,10 @@ from collections import namedtuple
 from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
+
+if TYPE_CHECKING:
+    from store.client import QueryResult, StoreClient
 
 from workflow.engine import WorkflowEngine
 
@@ -295,7 +298,7 @@ class Storable:
     # ── Active Record API ─────────────────────────────────────────────
 
     @staticmethod
-    def _get_client() -> Any:
+    def _get_client() -> "StoreClient":
         """Return the StoreClient from the active UserConnection."""
         from store.connection import get_connection
         return get_connection()._client
@@ -306,7 +309,7 @@ class Storable:
         from store.connection import get_connection
         return get_connection().conn
 
-    def save(self, valid_from: Any = None) -> str:
+    def save(self, valid_from: datetime | None = None) -> str:
         """Persist this object: create if new, update if existing.
 
         Returns entity_id on first save.
@@ -323,7 +326,7 @@ class Storable:
         client = self._get_client()
         return client.delete(self)
 
-    def transition(self, new_state: str, valid_from: Any = None) -> None:
+    def transition(self, new_state: str, valid_from: datetime | None = None) -> None:
         """Transition to a new lifecycle state."""
         client = self._get_client()
         client.transition(self, new_state, valid_from=valid_from)
@@ -383,13 +386,13 @@ class Storable:
         return unshare_read(conn, self._store_entity_id, user)
 
     @classmethod
-    def find(cls, entity_id: str) -> Any:
+    def find(cls, entity_id: str) -> Self | None:
         """Read the latest non-deleted version of an entity by ID."""
         client = cls._get_client()
         return client.read(cls, entity_id)
 
     @classmethod
-    def query(cls, filters: dict | None = None, limit: int = 100, cursor: Any = None) -> Any:
+    def query(cls, filters: dict | None = None, limit: int = 100, cursor: Any = None) -> "QueryResult[Self]":
         """Query current entities of this type with optional filters."""
         client = cls._get_client()
         return client.query(cls, filters=filters, limit=limit, cursor=cursor)
@@ -401,7 +404,7 @@ class Storable:
         return client.count(cls)
 
     @classmethod
-    def as_of(cls, entity_id: str, *, tx_time: Any = None, valid_time: Any = None) -> Any:
+    def as_of(cls, entity_id: str, *, tx_time: datetime | None = None, valid_time: datetime | None = None) -> Self | None:
         """Bi-temporal point-in-time query."""
         client = cls._get_client()
         return client.as_of(cls, entity_id, tx_time=tx_time, valid_time=valid_time)

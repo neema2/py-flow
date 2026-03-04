@@ -96,9 +96,10 @@ def create_query_tools(ctx: _PlatformContext) -> list:
             rows = []
             for obj in result:
                 row = {}
-                for f in dataclasses.fields(obj):
-                    if not f.name.startswith("_"):
-                        row[f.name] = getattr(obj, f.name)
+                if dataclasses.is_dataclass(obj):
+                    for f in dataclasses.fields(obj):
+                        if not f.name.startswith("_"):
+                            row[f.name] = getattr(obj, f.name)
                 if obj._store_entity_id:
                     row["_entity_id"] = obj._store_entity_id
                 rows.append(row)

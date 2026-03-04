@@ -158,7 +158,7 @@ async def get_snapshot_by_type_symbol(msg_type: str, symbol: str) -> dict:
 
 def _require_tsdb() -> TSDBBackend:
     """Return the TSDB backend or raise 503 if unavailable."""
-    tsdb = getattr(app.state, "tsdb", None)
+    tsdb: TSDBBackend | None = getattr(app.state, "tsdb", None)
     if tsdb is None:
         raise HTTPException(status_code=503, detail="TSDB backend not available")
     return tsdb

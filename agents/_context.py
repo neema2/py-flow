@@ -44,7 +44,7 @@ class _PlatformContext:
         streaming_alias: str | None = None,
         md_alias: str | None = None,
         media_alias: str | None = None,
-        ai: Any = None,
+        ai: AI | None = None,
     ) -> None:
         self._alias = alias
         self._user = user
@@ -59,7 +59,7 @@ class _PlatformContext:
         self._media_alias = media_alias or alias
 
         # Pre-built AI (or lazy)
-        self._ai_instance = ai
+        self._ai_instance: AI | None = ai
 
         # Lazy client slots
         self._lakehouse_instance: Lakehouse | None = None

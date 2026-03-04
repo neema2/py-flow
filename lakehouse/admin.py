@@ -58,7 +58,7 @@ def _find_free_port() -> int:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
-        return s.getsockname()[1]
+        return int(s.getsockname()[1])
 
 
 class LakehouseServer:
@@ -166,7 +166,7 @@ class LakehouseServer:
         time.sleep(0.3)
         logger.info(
             "RLS Flight server started on port %d with %d policies",
-            port, len(self._rls_policies),
+            port, len(self._rls_policies or []),
         )
 
     def _stop_rls_server(self) -> None:

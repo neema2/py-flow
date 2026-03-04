@@ -266,7 +266,7 @@ class PortfolioRisk(Storable):
 # ── Global reactive graph instances ─────────────────────────────────────
 
 _positions: dict[str, Position] = {}
-_portfolio_risk: PortfolioRisk = None  # type: ignore
+_portfolio_risk: PortfolioRisk = None  # type: ignore[assignment]
 MD_BASE_URL = None
 _media_store: _MediaStoreType | None = None
 _lakehouse = None      # Lakehouse client for analytics

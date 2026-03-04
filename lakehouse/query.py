@@ -125,7 +125,7 @@ class Lakehouse:
 
             # Authenticate with the bearer token
             self._flight_client.authenticate(
-                _TokenClientAuthHandler(self._token)
+                _TokenClientAuthHandler(self._token or "")
             )
 
             # Fetch the set of protected tables from the server
@@ -694,6 +694,9 @@ class _TokenClientAuthHandler:
     Extends flight.ClientAuthHandler when pyarrow.flight is available.
     """
 
+    _token: bytes
+    _session_token: bytes
+
     def __new__(cls, token: str) -> _TokenClientAuthHandler:
         try:
             import pyarrow.flight as _flight
@@ -702,7 +705,7 @@ class _TokenClientAuthHandler:
                 bases = (_flight.ClientAuthHandler,)
                 ns = {k: v for k, v in cls.__dict__.items() if k != "__dict__"}
                 new_cls = type(cls.__name__, bases, ns)
-                instance = _flight.ClientAuthHandler.__new__(new_cls)
+                instance: _TokenClientAuthHandler = _flight.ClientAuthHandler.__new__(new_cls)  # type: ignore[assignment]
                 instance._token = token.encode("utf-8")
                 instance._session_token = b""
                 return instance

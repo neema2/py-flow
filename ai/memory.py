@@ -238,7 +238,7 @@ class AgentMemory:
             cursor = self._conn.conn.cursor()
             cursor.execute(f"DELETE FROM {_TABLE} WHERE id = %s", (conversation_id,))
             self._conn.conn.commit()
-            return cursor.rowcount > 0
+            return bool(cursor.rowcount > 0)
         except Exception as e:
             logger.warning("Failed to delete conversation %s: %s", conversation_id, e)
             return False

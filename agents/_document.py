@@ -168,7 +168,7 @@ def create_document_tools(ctx: _PlatformContext) -> list:
                 # Try downloading and extracting
                 data = ms.download(doc)
                 from media.extraction import extract_text
-                text = extract_text(data, doc.content_type)
+                text = extract_text(data, doc.content_type) or ""
 
             if not text:
                 return json.dumps({"error": "No text content available in document"})

@@ -127,7 +127,7 @@ def score_row_count_preservation(case: AgentEvalCase, artifacts: dict) -> float:
     actual_count = artifacts.get("rows_written", 0)
     if expected_count == 0:
         return 1.0 if actual_count == 0 else 0.0
-    return min(actual_count / expected_count, 1.0)
+    return float(min(actual_count / expected_count, 1.0))
 
 
 def score_star_schema_design(case: AgentEvalCase, artifacts: dict) -> float:

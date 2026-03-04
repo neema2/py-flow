@@ -70,12 +70,12 @@ def lakehouse_stack():
         ],
         rls_users={"alice-token": "alice", "bob-token": "bob"},
     )
-    asyncio.get_event_loop().run_until_complete(server.start())
+    asyncio.run(server.start())
     server.register_alias("rls-test")
 
     yield server
 
-    asyncio.get_event_loop().run_until_complete(server.stop())
+    asyncio.run(server.stop())
     shutil.rmtree(data_dir, ignore_errors=True)
 
 

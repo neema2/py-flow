@@ -181,7 +181,7 @@ class LiveTable:
     @property
     def size(self) -> int:
         """Current row count."""
-        return self._table.size
+        return int(self._table.size)
 
     def __repr__(self) -> str:
         return f"<LiveTable rows={self.size}>"

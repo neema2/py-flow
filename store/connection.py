@@ -41,14 +41,22 @@ def _resolve_alias(name: str) -> dict | None:
         return _aliases.get(name)
 
 
-# ── Active connection (thread-local for safety) ──────────────────────
 
-_active: threading.local = threading.local()
+class _ConnectionLocal(threading.local):
+    """Typed thread-local storage for the active UserConnection."""
+    connection: UserConnection | None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.connection = None
+
+
+_active = _ConnectionLocal()
 
 
 def get_connection() -> UserConnection:
     """Return the active ``UserConnection`` or raise."""
-    conn = getattr(_active, "connection", None)
+    conn = _active.connection
     if conn is None:
         raise RuntimeError(
             "No active connection. Call store.connect() first."
@@ -93,7 +101,7 @@ class UserConnection:
 
     def deactivate(self) -> None:
         """Remove this connection from the active slot (if it is active)."""
-        if getattr(_active, "connection", None) is self:
+        if _active.connection is self:
             _set_active(None)
 
     def close(self) -> None:

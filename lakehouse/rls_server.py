@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import struct
 import threading
+from collections.abc import Generator
 from dataclasses import dataclass, field
 
 import duckdb
@@ -370,7 +371,7 @@ class RLSFlightServer(flight.FlightServerBase):
         raise flight.FlightInternalError("Only CMD descriptors are supported")
 
     def list_flights(self, context: flight.ServerCallContext,
-                     criteria: bytes) -> list:
+                     criteria: bytes) -> Generator[flight.FlightInfo, None, None]:
         """List available tables as FlightInfo entries."""
         with self._lock:
             try:
@@ -401,7 +402,7 @@ class RLSFlightServer(flight.FlightServerBase):
             yield info
 
     def do_action(self, context: flight.ServerCallContext,
-                  action: flight.Action) -> list:
+                  action: flight.Action) -> Generator[flight.Result, None, None]:
         """Handle custom actions.
 
         Supported actions:

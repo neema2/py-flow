@@ -218,14 +218,14 @@ Always respond with exactly one JSON object per turn. No other text."""
             clean = "\n".join(lines).strip()
 
         try:
-            return json.loads(clean)
+            return dict(json.loads(clean))
         except json.JSONDecodeError:
             # Try to find JSON in the text
             start = clean.find("{")
             end = clean.rfind("}") + 1
             if start >= 0 and end > start:
                 try:
-                    return json.loads(clean[start:end])
+                    return dict(json.loads(clean[start:end]))
                 except json.JSONDecodeError:
                     pass
             return None

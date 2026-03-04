@@ -37,7 +37,7 @@ class TestConfigModels:
     def test_column_config_frozen_and_replace(self):
         col = DatacubeColumnConfig(name="x", type="str")
         with pytest.raises(AttributeError):
-            col.name = "y"  # type: ignore
+            col.name = "y"  # type: ignore[assignment]
         col2 = DatacubeColumnConfig(name="price", type="float", kind="measure", aggregate_operator="sum")
         col3 = col2.replace(aggregate_operator="avg")
         assert col2.aggregate_operator == "sum" and col3.aggregate_operator == "avg"
@@ -50,7 +50,7 @@ class TestConfigModels:
         e = ExtendedColumn(name="notional", expression="price * quantity")
         assert e.name == "notional" and e.type == "float"
         with pytest.raises(AttributeError):
-            e.name = "y"  # type: ignore
+            e.name = "y"  # type: ignore[misc]
         f = Filter(field="sector", op="eq", value="Tech")
         assert f.field == "sector" and f.op == "eq"
         s = Sort(field="price", descending=True)
@@ -65,7 +65,7 @@ class TestDatacubeSnapshot:
         snap = DatacubeSnapshot(source="trades")
         assert snap.source == "trades" and snap.columns == () and snap.group_by == ()
         with pytest.raises(AttributeError):
-            snap.source = "x"  # type: ignore
+            snap.source = "x"  # type: ignore[misc]
         snap2 = DatacubeSnapshot(source="t", group_by=("a",))
         snap3 = DatacubeSnapshot(source="t", group_by=("a",))
         assert hash(snap2) == hash(snap3)

@@ -62,7 +62,7 @@ class MarketDataClient:
     @property
     def base_url(self) -> str:
         """The resolved base URL for the market data server."""
-        return self._base_url
+        return str(self._base_url)
 
     def health(self) -> bool:
         """Check if the market data server is healthy."""
@@ -77,7 +77,7 @@ class MarketDataClient:
         try:
             resp = httpx.get(f"{self._base_url}/md/symbols", timeout=5.0)
             resp.raise_for_status()
-            return resp.json()
+            return list(resp.json())
         except Exception as e:
             logger.error("Failed to list symbols: %s", e)
             return []
@@ -89,7 +89,7 @@ class MarketDataClient:
                 f"{self._base_url}/md/snapshot/{symbol}", timeout=5.0
             )
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
         except Exception as e:
             logger.error("Failed to get snapshot for %s: %s", symbol, e)
             return {"error": str(e)}
@@ -103,7 +103,7 @@ class MarketDataClient:
                 timeout=5.0,
             )
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
         except Exception as e:
             logger.error("Failed to publish tick: %s", e)
             return {"error": str(e)}

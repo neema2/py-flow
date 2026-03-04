@@ -18,11 +18,20 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     import duckdb
     from store.base import Storable
+
+
+@runtime_checkable
+class LakehouseProtocol(Protocol):
+    """Structural type for the Lakehouse duck-typed interface."""
+
+    def _ensure_conn(self) -> duckdb.DuckDBPyConnection: ...
+    def _fqn(self, table_name: str) -> str: ...
+    def table_info(self, table_name: str) -> list[dict]: ...
 
 from datacube import compiler as _compiler
 from datacube.config import (
@@ -67,7 +76,7 @@ class Datacube:
         *,
         snapshot: DatacubeSnapshot | None = None,
         source_name: str | None = None,
-        lakehouse: Any | None = None,
+        lakehouse: LakehouseProtocol | None = None,
     ) -> None:
         """
         Args:
@@ -361,11 +370,7 @@ class Datacube:
 
 def _is_lakehouse(obj: Any) -> bool:
     """Check if an object is a Lakehouse instance (duck-typed)."""
-    return (
-        hasattr(obj, '_ensure_conn')
-        and hasattr(obj, '_fqn')
-        and hasattr(obj, 'table_info')
-    )
+    return isinstance(obj, LakehouseProtocol)
 
 
 def _columns_from_lakehouse(
@@ -434,7 +439,7 @@ def _columns_from_lakehouse(
 def _resolve_source(
     source: Any,
     *,
-    lakehouse: Any | None = None,
+    lakehouse: LakehouseProtocol | None = None,
 ) -> tuple[Any, str, list[DatacubeColumnConfig]]:
     """Resolve a source argument to (duckdb_conn, source_name, columns).
 
@@ -454,7 +459,7 @@ def _resolve_source(
 
     # Helper: get a DuckDB connection (prefer Lakehouse's if available)
     def _get_conn() -> duckdb.DuckDBPyConnection:
-        if lakehouse is not None and _is_lakehouse(lakehouse):
+        if lakehouse is not None and isinstance(lakehouse, LakehouseProtocol):
             return lakehouse._ensure_conn()
         return duckdb.connect()
 
@@ -521,7 +526,7 @@ def _resolve_storable_source(cls: type[Storable]) -> tuple[Any, str, list[Datacu
         return conn, view_name, _columns_from_storable_class(cls)
 
     # Convert to list of dicts
-    rows = []
+    rows: list[dict[str, Any]] = []
     for item in items:
         if dc_mod.is_dataclass(item):
             row = {}

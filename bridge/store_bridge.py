@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from store.base import Storable
 from store.client import StoreClient
@@ -200,7 +200,7 @@ class StoreBridge:
         # Apply Expr filter if configured
         if reg.filter_expr is not None:
             try:
-                obj_data = dataclasses.asdict(obj) if dataclasses.is_dataclass(obj) else {}  # type: ignore[arg-type]
+                obj_data: dict[str, Any] = dataclasses.asdict(obj) if dataclasses.is_dataclass(obj) else {}  # type: ignore[arg-type]
                 if not reg.filter_expr.eval(obj_data):
                     return
             except Exception:

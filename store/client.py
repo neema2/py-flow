@@ -10,7 +10,7 @@ import json
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import psycopg2
 import psycopg2.extras
@@ -32,20 +32,23 @@ class VersionConflict(Exception):
         )
 
 
-class QueryResult:
+_S = TypeVar("_S", bound=Storable)
+
+
+class QueryResult(Generic[_S]):
     """Result of a paginated query. Contains items and an optional next_cursor."""
 
-    def __init__(self, items: list, next_cursor: Any = None) -> None:
+    def __init__(self, items: list[_S], next_cursor: Any = None) -> None:
         self.items = items
         self.next_cursor = next_cursor
 
-    def __iter__(self) -> Iterator:
+    def __iter__(self) -> Iterator[_S]:
         return iter(self.items)
 
     def __len__(self) -> int:
         return len(self.items)
 
-    def __getitem__(self, index: int) -> Any:
+    def __getitem__(self, index: int) -> _S:
         return self.items[index]
 
 
@@ -80,7 +83,7 @@ class StoreClient:
 
     # ── Write operations (all append-only) ────────────────────────────
 
-    def write(self, obj: Any, valid_from: datetime | None = None) -> str:
+    def write(self, obj: Storable, valid_from: datetime | None = None) -> str:
         """
         Create a new entity (version 1). Returns the entity_id.
         If the Storable class has a state machine, initial state is set automatically.
@@ -119,7 +122,7 @@ class StoreClient:
             self._emit_event(obj)
             return obj._store_entity_id
 
-    def update(self, obj: Any, valid_from: datetime | None = None) -> None:
+    def update(self, obj: Storable, valid_from: datetime | None = None) -> None:
         """
         Create a new version of an existing entity (never overwrites).
         Automatically determines event_type: UPDATED or CORRECTED (if backdated).
@@ -189,7 +192,7 @@ class StoreClient:
             obj._store_event_type = event_type
             self._emit_event(obj)
 
-    def delete(self, obj: Any) -> bool:
+    def delete(self, obj: Storable) -> bool:
         """
         Soft-delete: creates a DELETED tombstone event.
         The entity disappears from read()/query() but remains in history().
@@ -238,7 +241,7 @@ class StoreClient:
             self._emit_event(obj)
             return row[0] is not None
 
-    def transition(self, obj: Any, new_state: str, valid_from: datetime | None = None) -> None:
+    def transition(self, obj: Storable, new_state: str, valid_from: datetime | None = None) -> None:
         """
         Transition an entity to a new lifecycle state.
 
@@ -253,6 +256,7 @@ class StoreClient:
             )
 
         current_state = obj._store_state
+        assert current_state is not None, f"{type(obj).__name__} has no current state"
         sm = obj._state_machine
 
         # Build context from object data for guard evaluation
@@ -263,12 +267,13 @@ class StoreClient:
             current_state, new_state, context=context, user=self.user, obj=obj
         )
 
+        assert obj._store_entity_id is not None
         next_ver = self._next_version(obj._store_entity_id)
         json_data = obj.to_json()
         type_name = obj.type_name()
 
         # Richer event_meta for audit
-        meta = {
+        meta: dict[str, object] = {
             "from_state": current_state,
             "to_state": new_state,
             "triggered_by": self.user,
@@ -276,7 +281,7 @@ class StoreClient:
         if t.guard is not None:
             meta["guard"] = str(t.guard)
         if t.allowed_by is not None:
-            meta["allowed_by"] = t.allowed_by
+            meta["allowed_by"] = list(t.allowed_by)
         event_meta = json.dumps(meta)
 
         # === TIER 1: state change + action inside transaction ===
@@ -350,7 +355,7 @@ class StoreClient:
                 )
             wf_engine.workflow(t.start_workflow, obj._store_entity_id)
 
-    def write_many(self, objects: list, valid_from: datetime | None = None) -> list[str]:
+    def write_many(self, objects: list[Storable], valid_from: datetime | None = None) -> list[str]:
         """
         Write multiple new entities in a single transaction.
         Returns list of entity_ids.
@@ -370,7 +375,7 @@ class StoreClient:
         finally:
             self.conn.autocommit = old_autocommit
 
-    def update_many(self, objects: list, valid_from: datetime | None = None) -> None:
+    def update_many(self, objects: list[Storable], valid_from: datetime | None = None) -> None:
         """
         Update multiple entities in a single transaction.
         Optimistic concurrency is automatic on each entity.
@@ -389,7 +394,7 @@ class StoreClient:
 
     # ── Read operations ───────────────────────────────────────────────
 
-    def read(self, cls: type[Storable], entity_id: str) -> Any:
+    def read(self, cls: type[_S], entity_id: str) -> _S | None:
         """
         Read the latest non-deleted version of an entity.
         Returns None if not found, not visible, or deleted.
@@ -415,7 +420,7 @@ class StoreClient:
                 return None
             return self._row_to_object(cls, row)
 
-    def query(self, cls: type[Storable], filters: dict | None = None, limit: int = 100, cursor: Any = None) -> "QueryResult":
+    def query(self, cls: type[_S], filters: dict | None = None, limit: int = 100, cursor: Any = None) -> QueryResult[_S]:
         """
         Query current (latest non-deleted) entities of a given type.
 
@@ -470,7 +475,7 @@ class StoreClient:
 
         return QueryResult(items=items, next_cursor=next_cursor)
 
-    def history(self, cls: type[Storable], entity_id: str) -> list:
+    def history(self, cls: type[_S], entity_id: str) -> list[_S]:
         """
         Return all versions of an entity, ordered by version ascending.
         Includes DELETED tombstones.
@@ -490,7 +495,7 @@ class StoreClient:
             rows = cur.fetchall()
             return [self._row_to_object(cls, row) for row in rows]
 
-    def as_of(self, cls: type[Storable], entity_id: str, tx_time: datetime | None = None, valid_time: datetime | None = None) -> Any:
+    def as_of(self, cls: type[_S], entity_id: str, tx_time: datetime | None = None, valid_time: datetime | None = None) -> _S | None:
         """
         Bi-temporal point-in-time query.
 
@@ -557,9 +562,9 @@ class StoreClient:
                     WHERE event_type != 'DELETED'
                     """
                 )
-            return cur.fetchone()[0]
+            return int(cur.fetchone()[0])
 
-    def audit(self, entity_id: str) -> list[dict]:
+    def audit(self, entity_id: str) -> list[dict[str, Any]]:
         """
         Return the full audit trail for an entity: who changed what, when.
         Returns list of AuditEntry dicts ordered by version.
@@ -600,18 +605,20 @@ class StoreClient:
 
     # ── Internal helpers ──────────────────────────────────────────────
 
-    def _emit_event(self, obj: Any) -> None:
+    def _emit_event(self, obj: Storable) -> None:
         """Emit a ChangeEvent to the event bus (if wired)."""
         if self.event_bus is None:
+            return
+        if obj._store_entity_id is None or obj._store_version is None:
             return
         event = ChangeEvent(
             entity_id=obj._store_entity_id,
             version=obj._store_version,
-            event_type=obj._store_event_type,
+            event_type=obj._store_event_type or "UNKNOWN",
             type_name=obj.type_name(),
             updated_by=self.user,
             state=obj._store_state,
-            tx_time=obj._store_tx_time,
+            tx_time=obj._store_tx_time or datetime.now(timezone.utc),
         )
         self.event_bus.emit(event)
 
@@ -622,9 +629,9 @@ class StoreClient:
                 "SELECT COALESCE(MAX(version), 0) + 1 FROM object_events WHERE entity_id = %s",
                 (entity_id,),
             )
-            return cur.fetchone()[0]
+            return int(cur.fetchone()[0])
 
-    def _row_to_object(self, cls: type[Storable], row: tuple) -> Any:
+    def _row_to_object(self, cls: type[_S], row: tuple) -> _S:
         """Convert a database row to a typed Python object with bi-temporal metadata."""
         (_event_id, entity_id, version, _type_name, owner,
          updated_by, _readers, _writers, data, state, event_type,
@@ -639,7 +646,7 @@ class StoreClient:
                 object_hook=_json_decoder_hook,
             )
 
-        obj = cls.from_json(json.dumps(data, cls=_JSONEncoder))
+        obj: _S = cls.from_json(json.dumps(data, cls=_JSONEncoder))  # type: ignore[assignment]  # from_json returns Self at runtime
         obj._store_entity_id = str(entity_id)
         obj._store_version = version
         obj._store_owner = owner

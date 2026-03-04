@@ -65,7 +65,7 @@ def _arrow_to_ipc(table: pa.Table) -> bytes:
     writer = pa.ipc.new_stream(sink, table.schema)
     writer.write_table(table)
     writer.close()
-    return sink.getvalue().to_pybytes()
+    return bytes(sink.getvalue().to_pybytes())
 
 
 # ── State helpers ─────────────────────────────────────────────────
