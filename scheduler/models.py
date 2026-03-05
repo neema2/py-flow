@@ -18,8 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from store.base import Embedded, Storable
-from store.state_machine import StateMachine, Transition
+from store import Embedded, Storable, StateMachine, Transition
 
 # ── Task (Embedded — reactive, not independently persisted) ──────────────
 

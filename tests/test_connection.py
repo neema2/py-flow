@@ -18,7 +18,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from store.base import Storable
-from store.connection import _set_active, connect, get_connection
+from store.connection import _set_active, connect, active_connection
 from store.server import StoreServer
 from store.state_machine import StateMachine, Transition
 
@@ -108,14 +108,14 @@ class TestConnect:
         with connect(host=conn_info["host"], port=conn_info["port"],
                      dbname=conn_info["dbname"],
                      user="alice", password="alice_pw") as db:
-            assert get_connection() is db
+            assert active_connection() is db
         # After exit, connection is deactivated
         _set_active(None)
 
     def test_no_connection_raises(self):
         _set_active(None)
         with pytest.raises(RuntimeError, match="No active connection"):
-            get_connection()
+            active_connection()
 
     def test_repr(self, alice_db):
         assert "alice" in repr(alice_db)

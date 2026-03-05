@@ -294,8 +294,8 @@ class MediaStore:
         Returns:
             List of dicts with entity_id, title, filename, content_type, tags, rank.
         """
-        from store.connection import get_connection
-        conn = get_connection()
+        from store.connection import active_connection
+        conn = active_connection()
         return search_documents(conn.conn, query, content_type, tags, limit)
 
     def semantic_search(
@@ -328,8 +328,8 @@ class MediaStore:
 
         query_embedding = self._embedder.embed_query(query)
 
-        from store.connection import get_connection
-        conn = get_connection()
+        from store.connection import active_connection
+        conn = active_connection()
         return semantic_search_documents(conn.conn, query_embedding, limit)
 
     def hybrid_search(
@@ -369,8 +369,8 @@ class MediaStore:
 
         query_embedding = self._embedder.embed_query(query)
 
-        from store.connection import get_connection
-        conn = get_connection()
+        from store.connection import active_connection
+        conn = active_connection()
         return hybrid_search_documents(
             conn.conn, query, query_embedding,
             limit=limit, k=k,
@@ -421,8 +421,8 @@ class MediaStore:
 
         # Remove from search index
         try:
-            from store.connection import get_connection
-            conn = get_connection()
+            from store.connection import active_connection
+            conn = active_connection()
             delete_search_index(conn.conn, str(doc.entity_id))
         except Exception as e:
             logger.warning("Failed to remove search index: %s", e)
@@ -436,8 +436,8 @@ class MediaStore:
     def _update_search_index(self, doc: Document) -> None:
         """Update the full-text search index for a document."""
         try:
-            from store.connection import get_connection
-            conn = get_connection()
+            from store.connection import active_connection
+            conn = active_connection()
             upsert_search_index(
                 conn.conn,
                 entity_id=str(doc.entity_id),
@@ -472,8 +472,8 @@ class MediaStore:
             embeddings = self._embedder.embed(chunk_texts)
 
             # Store chunks + embeddings in document_chunks table
-            from store.connection import get_connection
-            conn = get_connection()
+            from store.connection import active_connection
+            conn = active_connection()
             entity_id = str(doc.entity_id)
             upsert_document_chunks(conn.conn, entity_id, chunks, embeddings)
 

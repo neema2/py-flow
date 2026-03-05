@@ -36,7 +36,7 @@ logger = logging.getLogger("demo_lakehouse")
 
 # ── Storable types ────────────────────────────────────────────────────────
 
-from store.base import Storable
+from store import Storable
 
 
 @dataclass
@@ -59,7 +59,7 @@ class Order(Storable):
 
 def seed_storable_objects(server_info: dict) -> int:
     """Save real Storable objects via the public API."""
-    from store.connection import connect
+    from store import connect
 
     conn = connect(
         host=server_info["host"],

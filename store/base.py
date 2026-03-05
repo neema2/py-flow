@@ -346,14 +346,14 @@ class Storable:
     @staticmethod
     def _get_client() -> "StoreClient":
         """Return the StoreClient from the active UserConnection."""
-        from store.connection import get_connection
-        return get_connection()._client
+        from store.connection import active_connection
+        return active_connection()._client
 
     @staticmethod
     def _get_conn() -> Any:
         """Return the raw psycopg2 connection from the active UserConnection."""
-        from store.connection import get_connection
-        return get_connection().conn
+        from store.connection import active_connection
+        return active_connection().conn
 
     def save(self, valid_from: datetime | None = None) -> str:
         """Persist this object: create if new, update if existing.

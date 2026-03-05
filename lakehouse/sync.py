@@ -21,7 +21,7 @@ from lakehouse.models import SyncState
 
 if TYPE_CHECKING:
     from lakehouse.query import Lakehouse
-    from timeseries.base import TSDBBackend
+    from timeseries import TSDBBackend
 
 logger = logging.getLogger(__name__)
 

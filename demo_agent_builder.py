@@ -62,7 +62,7 @@ from ai.eval import EvalCase, EvalRunner
 from ai.team import AgentTeam
 from reactive.agg import group_by, rank_by
 from reactive.computed import computed, effect
-from store.base import Storable
+from store import Storable
 
 
 def section(title: str):

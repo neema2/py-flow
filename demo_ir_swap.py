@@ -62,7 +62,7 @@ print(f"  Market data server started on port {_md_server.port}")
 from dataclasses import dataclass, field
 
 from reactive.computed import computed, effect
-from store.base import Storable
+from store import Storable
 from streaming import agg, flush, get_tables, ticking
 
 # Publish queue: @effect on YieldCurvePoint.rate enqueues CurveTicks here;

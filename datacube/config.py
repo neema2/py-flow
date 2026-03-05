@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from store.registry import ColumnDef
+    from store import ColumnDef
 
 # ── Constants ──────────────────────────────────────────────────────────
 

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import duckdb
     import pandas as pd
     import pyarrow as pa
-    from store.base import Storable
+    from store import Storable
 
 
 @runtime_checkable

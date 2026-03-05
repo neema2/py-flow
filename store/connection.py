@@ -58,8 +58,12 @@ class _ConnectionLocal(threading.local):
 _active = _ConnectionLocal()
 
 
-def get_connection() -> UserConnection:
-    """Return the active ``UserConnection`` or raise."""
+def active_connection() -> UserConnection:
+    """Return the current thread's active ``UserConnection``, or raise if none is set.
+
+    A connection becomes *active* when created via :func:`connect` or
+    when :meth:`UserConnection.activate` is called explicitly.
+    """
     conn = _active.connection
     if conn is None:
         raise RuntimeError(

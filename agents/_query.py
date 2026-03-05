@@ -83,8 +83,8 @@ def create_query_tools(ctx: _PlatformContext) -> list:
             return json.dumps({"error": f"Type '{type_name}' not found in OLTP store."})
 
         try:
-            from store.connection import get_connection
-            get_connection()
+            from store.connection import active_connection
+            active_connection()
         except RuntimeError:
             if ctx.store_alias:
                 ctx.get_store_connection()

@@ -161,8 +161,8 @@ class WorkflowEngine(ABC):
         Must be called inside an active workflow.
         Uses the active store connection.
         """
-        from store.connection import get_connection
-        client = get_connection()._client
+        from store.connection import active_connection
+        client = active_connection()._client
         return self.step(
             lambda: client.transition(obj, new_state, **kwargs)
         )

@@ -26,9 +26,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any
 
-from store.base import Storable
-from store.connection import UserConnection
-from store.subscriptions import ChangeEvent, EventBus, SubscriptionListener
+from store import ChangeEvent, Storable, connect
+from store.subscriptions import EventBus, SubscriptionListener
 from streaming import TickingTable
 
 from bridge.sinks import EventSink
@@ -80,39 +79,22 @@ class StoreBridge:
                  user: str | None = None, password: str | None = None, *,
                  host: str | None = None,
                  subscriber_id: str | None = "deephaven_bridge") -> None:
-        # Resolve alias vs explicit params
-        if alias_or_host is not None and port is None and host is None:
-            # Looks like an alias — try to resolve
-            from store.connection import _resolve_alias
-            resolved = _resolve_alias(alias_or_host)
-            if resolved is not None:
-                self._conn_params = dict(
-                    host=resolved["host"], port=resolved["port"],
-                    dbname=resolved.get("dbname", "postgres"),
-                    user=user, password=password,
-                )
-            else:
-                # Treat as explicit host (backward compat)
-                self._conn_params = dict(
-                    host=alias_or_host, port=port or 5432,
-                    dbname=dbname or "postgres",
-                    user=user, password=password,
-                )
-        else:
-            self._conn_params = dict(
-                host=host or alias_or_host, port=port or 5432,
-                dbname=dbname or "postgres",
-                user=user, password=password,
-            )
+        # Store raw connection params — resolved via connect() in start()
+        self._alias_or_host = alias_or_host
+        self._host = host
+        self._port = port or 5432
+        self._dbname = dbname or "postgres"
+        self._user = user
+        self._password = password
         self._subscriber_id = subscriber_id
         self._registrations: dict[str, _Registration] = {}  # type_name → reg
         self._sinks: list[EventSink] = []  # pluggable extra sinks
         self._bus = EventBus()
         self._listener: SubscriptionListener | None = None
-        self._conn: UserConnection | None = None
+        self._conn: Any = None  # set in start()
         self._started = False
 
-    def _require_client(self) -> UserConnection:
+    def _require_client(self) -> Any:
         assert self._conn is not None, "StoreBridge not started"
         return self._conn
 
@@ -180,24 +162,28 @@ class StoreBridge:
         if self._started:
             return
 
-        # UserConnection for read-back (uses same PG connection params)
-        from store.connection import connect
+        # Connect via public API — connect() handles alias resolution
+        assert self._user is not None, "StoreBridge requires user"
+        assert self._password is not None, "StoreBridge requires password"
         self._conn = connect(
-            host=self._conn_params["host"],
-            port=self._conn_params["port"],
-            dbname=self._conn_params.get("dbname", "postgres"),
-            user=self._conn_params["user"],
-            password=self._conn_params["password"],
+            self._alias_or_host,
+            host=self._host,
+            port=self._port,
+            dbname=self._dbname,
+            user=self._user,
+            password=self._password,
         )
 
         # Wire EventBus → _dispatch
         self._bus.on_all(self._dispatch)
 
         # Start SubscriptionListener (PG LISTEN/NOTIFY + durable catch-up)
+        # SubscriptionListener needs raw PG params — use resolved conn params
+        conn_params = self._conn._conn_params  # resolved by connect()
         self._listener = SubscriptionListener(
             event_bus=self._bus,
             subscriber_id=self._subscriber_id,
-            **self._conn_params,
+            **conn_params,
         )
         self._listener.start()
         self._started = True

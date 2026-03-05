@@ -26,7 +26,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from bridge.sinks import EventSink
-from store.subscriptions import ChangeEvent
+from store import ChangeEvent
 
 if TYPE_CHECKING:
     from lakehouse import Lakehouse

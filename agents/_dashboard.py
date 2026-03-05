@@ -236,7 +236,7 @@ def create_dashboard_tools(ctx: _PlatformContext) -> list:
             return json.dumps({"error": f"Invalid JSON: {e}"})
 
         # Check which columns need defining
-        from store.columns import REGISTRY
+        from store import REGISTRY
         type_map = {"str": "str", "int": "int", "float": "float", "bool": "bool"}
 
         all_col_names = [f["name"] for f in fields]
@@ -247,7 +247,7 @@ def create_dashboard_tools(ctx: _PlatformContext) -> list:
 
         # Generate column definitions for new columns
         if new_cols:
-            col_lines = ["from store.columns import REGISTRY", ""]
+            col_lines = ["from store import REGISTRY", ""]
             for col_name in new_cols:
                 # Find type from fields or default to float for computeds
                 field_match = next((f for f in fields if f["name"] == col_name), None)

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from store.subscriptions import ChangeEvent
+from store import ChangeEvent
 
 
 class EventSink(ABC):

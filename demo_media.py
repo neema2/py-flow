@@ -45,7 +45,7 @@ def run_demo():
 
     from media.admin import MediaServer
     from media.models import bootstrap_search_schema
-    from store.connection import connect
+    from store import connect
     from store.server import StoreServer
 
     # PG for Storable metadata

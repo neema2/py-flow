@@ -35,8 +35,8 @@ def auto_persist_effect(obj: Any, store_conn: UserConnection | None = None) -> l
         List of Effect instances created (one per @computed on this object).
     """
     if store_conn is None:
-        from store.connection import get_connection
-        store_conn = get_connection()
+        from store.connection import active_connection
+        store_conn = active_connection()
 
     reactive = object.__getattribute__(obj, '_reactive')
     effects = []

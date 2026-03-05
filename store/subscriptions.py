@@ -288,8 +288,8 @@ class EventListener:
         """Lazy-start the PG LISTEN thread if subscriber_id is set."""
         if self._started or self._subscriber_id is None:
             return
-        from store.connection import get_connection
-        conn = get_connection()
+        from store.connection import active_connection
+        conn = active_connection()
         params: dict[str, Any] = dict(conn._conn_params)
         self._listener = SubscriptionListener(
             event_bus=self._bus,

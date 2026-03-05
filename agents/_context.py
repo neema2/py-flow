@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from lakehouse import Lakehouse
     from marketdata.client import MarketDataClient
     from media.store import MediaStore
-    from store.base import Storable
+    from store import Storable
     from store.connection import UserConnection
     from streaming import StreamingClient
     from timeseries import Timeseries
@@ -200,8 +200,9 @@ class _PlatformContext:
         # Store
         if self._store_alias:
             try:
-                from store.connection import _resolve_alias
-                status["store"] = _resolve_alias(self._store_alias) is not None
+                conn = self.get_store_connection()
+                conn.close()
+                status["store"] = True
             except Exception:
                 status["store"] = False
         else:

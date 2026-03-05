@@ -83,7 +83,7 @@ def _build_storable_class(name: str, fields: list[dict]) -> type:
     Returns:
         A new dataclass that inherits from Storable.
     """
-    from store.base import Storable
+    from store import Storable
 
     # Build field definitions for dataclasses.make_dataclass
     dc_fields = []
@@ -222,7 +222,7 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
             return json.dumps({"error": f"Type '{name}' already exists."})
 
         # Check which columns already exist in the registry
-        from store.columns import REGISTRY
+        from store import REGISTRY
 
         new_columns = []
         existing_columns = []
@@ -236,7 +236,7 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
         # Generate column definition code for new columns
         col_lines = []
         if new_columns:
-            col_lines.append("from store.columns import REGISTRY")
+            col_lines.append("from store import REGISTRY")
             col_lines.append("")
             for f in new_columns:
                 py_type = _TYPE_MAP.get(f["type"].lower(), str).__name__
@@ -253,7 +253,7 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
         # Generate Storable class code
         model_lines = [
             "from dataclasses import dataclass",
-            "from store.base import Storable",
+            "from store import Storable",
             "",
             "@dataclass",
             f"class {name}(Storable):",
@@ -351,8 +351,8 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
 
         # Need an active store connection
         try:
-            from store.connection import get_connection
-            conn = get_connection()
+            from store.connection import active_connection
+            conn = active_connection()
         except RuntimeError:
             # Try to connect using context
             if ctx.store_alias:
@@ -392,8 +392,8 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
 
         # Need an active store connection
         try:
-            from store.connection import get_connection
-            get_connection()
+            from store.connection import active_connection
+            active_connection()
         except RuntimeError:
             if ctx.store_alias:
                 ctx.get_store_connection()
@@ -428,8 +428,8 @@ def create_oltp_tools(ctx: _PlatformContext) -> list:
 
         # Need an active store connection
         try:
-            from store.connection import get_connection
-            get_connection()
+            from store.connection import active_connection
+            active_connection()
         except RuntimeError:
             if ctx.store_alias:
                 ctx.get_store_connection()
