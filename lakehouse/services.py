@@ -109,8 +109,8 @@ class EmbeddedPGManager:
         if pid_file.exists():
             # Try to connect
             try:
-                import psycopg2
-                conn = psycopg2.connect(
+                from store._types import connect as _db_connect
+                conn = _db_connect(
                     host="localhost", port=self._port,
                     user=self._user, dbname="postgres",
                     connect_timeout=2,
@@ -147,10 +147,10 @@ class EmbeddedPGManager:
             )
 
         # Wait for ready
-        import psycopg2
+        from store._types import connect as _db_connect
         for _ in range(10):
             try:
-                conn = psycopg2.connect(
+                conn = _db_connect(
                     host="localhost", port=self._port,
                     user=self._user, dbname="postgres",
                     connect_timeout=2,

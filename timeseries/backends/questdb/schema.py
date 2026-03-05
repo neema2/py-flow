@@ -1,7 +1,7 @@
 """
 QuestDB Schema
 ==============
-DDL for tick tables. Executed via PGWire (psycopg2) on startup.
+DDL for tick tables. Executed via PGWire on startup.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import psycopg2.extensions
+    from store._types import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +60,11 @@ PARTITION BY DAY;
 ALL_DDL = [EQUITY_TICKS_DDL, FX_TICKS_DDL, CURVE_TICKS_DDL]
 
 
-def create_tables(conn: psycopg2.extensions.connection, ttl_days: int = 90) -> None:
-    """Execute table DDL on a psycopg2 connection.
+def create_tables(conn: Connection, ttl_days: int = 90) -> None:
+    """Execute table DDL on a database connection.
 
     Args:
-        conn: A psycopg2 connection to QuestDB's PGWire interface.
+        conn: A database connection to QuestDB's PGWire interface.
         ttl_days: Data retention period (informational — QuestDB TTL
                   is applied via ALTER TABLE after creation).
     """

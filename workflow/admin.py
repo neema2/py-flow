@@ -19,13 +19,16 @@ from __future__ import annotations
 
 import os
 import urllib.parse
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pgserver
-import psycopg2
 from pgserver import PostgresServer
 
+from store._types import connect as _db_connect
 from workflow._registry import register_alias as _register_alias
+
+if TYPE_CHECKING:
+    from store._types import Connection
 
 # Reuse the same role constants as store for DBOS compatibility
 ADMIN_ROLE = "app_admin"
@@ -97,9 +100,9 @@ class WorkflowServer:
         parsed = urllib.parse.urlparse(uri)
         self._superuser = parsed.username or os.getenv("USER", "postgres")
 
-    def _superuser_conn(self) -> psycopg2.extensions.connection:
+    def _superuser_conn(self) -> Connection:
         """Get a superuser connection (local socket, trust auth)."""
-        return psycopg2.connect(self._require_pg().get_uri())
+        return _db_connect(self._require_pg().get_uri())
 
     def _bootstrap(self) -> None:
         """Create admin role and grant CREATE on database. Idempotent.

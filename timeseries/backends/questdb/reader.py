@@ -2,18 +2,21 @@
 QuestDB Reader — PGWire Queries
 ================================
 Reads historical data from QuestDB via its PostgreSQL wire protocol.
-Uses psycopg2 (already a core dependency).
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-import psycopg2
 import psycopg2.extras
 
+from store._types import connect as _db_connect
 from timeseries.models import Bar
+
+if TYPE_CHECKING:
+    from store._types import Connection
 
 logger = logging.getLogger(__name__)
 
@@ -62,16 +65,16 @@ class QuestDBReader:
     def __init__(self, host: str = "localhost", pg_port: int = 8812) -> None:
         self._host = host
         self._pg_port = pg_port
-        self._conn: psycopg2.extensions.connection | None = None
+        self._conn: Connection | None = None
 
     @property
-    def connection(self) -> psycopg2.extensions.connection | None:
-        """Raw psycopg2 connection (used by schema.create_tables)."""
+    def connection(self) -> Connection | None:
+        """Raw DB connection (used by schema.create_tables)."""
         return self._conn
 
     def connect(self) -> None:
         """Open the PGWire connection."""
-        self._conn = psycopg2.connect(
+        self._conn = _db_connect(
             host=self._host,
             port=self._pg_port,
             user="admin",

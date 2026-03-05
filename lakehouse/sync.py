@@ -20,7 +20,7 @@ from pyiceberg.catalog import Catalog
 from lakehouse.models import SyncState
 
 if TYPE_CHECKING:
-    import psycopg2.extensions
+    from store._types import Connection
     from timeseries.base import TSDBBackend
 
 logger = logging.getLogger(__name__)
@@ -54,12 +54,12 @@ class SyncEngine:
 
     # ── Sync: PG object_events → Iceberg events table ──────────────────────
 
-    def sync_events(self, pg_conn: psycopg2.extensions.connection) -> int:
+    def sync_events(self, pg_conn: Connection) -> int:
         """
         Incremental sync from PG object_events to Iceberg events table.
 
         Args:
-            pg_conn: psycopg2 connection to the source PostgreSQL database.
+            pg_conn: Database connection to the source store.
 
         Returns:
             Number of events synced.
@@ -194,7 +194,7 @@ class SyncEngine:
 
     # ── Full sync (convenience) ─────────────────────────────────────────────
 
-    def sync_all(self, pg_conn: psycopg2.extensions.connection | None = None, backend: TSDBBackend | None = None) -> dict:
+    def sync_all(self, pg_conn: Connection | None = None, backend: TSDBBackend | None = None) -> dict:
         """
         Run all available sync operations.
 

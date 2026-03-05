@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from ai._types import Message
 
 if TYPE_CHECKING:
-    import psycopg2.extensions
+    from store._types import Connection
     from store.client import StoreClient
 
     from ai.client import AI
@@ -41,11 +41,11 @@ logger = logging.getLogger(__name__)
 _TABLE = "agent_conversations"
 
 
-def bootstrap_conversations_table(admin_conn: psycopg2.extensions.connection, grant_to: str = "") -> None:
+def bootstrap_conversations_table(admin_conn: Connection, grant_to: str = "") -> None:
     """Create the agent_conversations table using an admin connection.
 
     Args:
-        admin_conn: A raw psycopg2 connection or admin_conn() from StoreServer.
+        admin_conn: A database admin connection (e.g. from StoreServer).
         grant_to: Optional role to GRANT ALL to.
     """
     cursor = admin_conn.cursor()
