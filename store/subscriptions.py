@@ -330,7 +330,7 @@ class EventListener:
         """Unsubscribe a catch-all listener."""
         self._bus.off_all(callback)
 
-    # ── Emit (used internally by StoreClient) ─────────────────────────
+    # ── Emit (used internally by ActiveRecordMixin) ─────────────────────────
 
     def emit(self, event: ChangeEvent) -> None:
         """Dispatch a ChangeEvent to all matching listeners."""

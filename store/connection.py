@@ -1,5 +1,5 @@
 """
-UserConnection — high-level connection API that hides StoreClient.
+UserConnection — pure connection wrapper for the object store.
 
 Users call ``connect()`` with an alias (or explicit params) plus their
 credentials.  The returned ``UserConnection`` becomes the *active*
@@ -15,16 +15,13 @@ connection used by ``Storable.save()``, ``Position.find()``, etc.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any
 
+import psycopg2
 import psycopg2.extensions
+import psycopg2.extras
 
-from store._client import QueryResult, StoreClient
-from store.base import Storable
 from store.subscriptions import EventBus
-
-_S = TypeVar("_S", bound=Storable)
 
 # ── Alias registry ────────────────────────────────────────────────────
 
@@ -77,9 +74,10 @@ def _set_active(conn: UserConnection | None) -> None:
 # ── UserConnection ────────────────────────────────────────────────────
 
 class UserConnection:
-    """Wraps a ``StoreClient`` and acts as the active connection context.
+    """Pure connection wrapper — manages the psycopg2 connection and thread-local context.
 
-    Normally created via :func:`connect` — not instantiated directly.
+    All SQL persistence logic lives in the ActiveRecordMixin (store/_active_record.py).
+    This class only provides the raw connection, user identity, and event bus.
     """
 
     def __init__(self, *, user: str, password: str,
@@ -88,18 +86,21 @@ class UserConnection:
                  event_bus: EventBus | None = None) -> None:
         self.user = user
         self.alias = alias
-        self._conn_params = dict(host=host, port=port, dbname=dbname,
-                                 user=user, password=password)
-        self._client = StoreClient(
-            user=user, password=password,
-            host=host, port=port, dbname=dbname,
-            event_bus=event_bus,
+        self.event_bus = event_bus
+        self._conn_params = {
+            "host": host, "port": port, "dbname": dbname,
+            "user": user, "password": password,
+        }
+        self.conn: psycopg2.extensions.connection = psycopg2.connect(
+            host=host,
+            port=port,
+            dbname=dbname,
+            user=user,
+            password=password,
         )
-
-    # Expose the raw psycopg2 connection for permissions helpers
-    @property
-    def conn(self) -> psycopg2.extensions.connection:
-        return self._client.conn
+        self.conn.autocommit = True
+        psycopg2.extras.register_uuid()
+        self.activate()
 
     def activate(self) -> None:
         """Make this the active connection for the current thread."""
@@ -110,60 +111,13 @@ class UserConnection:
         if _active.connection is self:
             _set_active(None)
 
-    # ── Store operations (typed proxies to internal StoreClient) ─────
-
-    def write(self, obj: Storable, valid_from: datetime | None = None) -> str:
-        """Create a new entity. Returns entity_id."""
-        return self._client.write(obj, valid_from=valid_from)
-
-    def update(self, obj: Storable, valid_from: datetime | None = None) -> None:
-        """Update an existing entity (new version)."""
-        self._client.update(obj, valid_from=valid_from)
-
-    def delete(self, obj: Storable) -> bool:
-        """Soft-delete an entity."""
-        return self._client.delete(obj)
-
-    def read(self, cls: type[_S], entity_id: str) -> _S | None:
-        """Read the latest version of an entity by ID."""
-        return self._client.read(cls, entity_id)
-
-    def query(self, cls: type[_S], filters: dict | None = None,
-              limit: int = 100, cursor: Any = None) -> QueryResult[_S]:
-        """Query entities of a type with optional filters."""
-        return self._client.query(cls, filters=filters, limit=limit, cursor=cursor)
-
-    def history(self, cls: type[_S], entity_id: str) -> list[_S]:
-        """Return all versions of an entity."""
-        return self._client.history(cls, entity_id)
-
-    def as_of(self, cls: type[_S], entity_id: str,
-              tx_time: datetime | None = None,
-              valid_time: datetime | None = None) -> _S | None:
-        """Bi-temporal point-in-time query."""
-        return self._client.as_of(cls, entity_id, tx_time=tx_time, valid_time=valid_time)
-
-    def transition(self, obj: Storable, new_state: str,
-                   valid_from: datetime | None = None) -> None:
-        """Transition an entity to a new lifecycle state."""
-        self._client.transition(obj, new_state, valid_from=valid_from)
-
-    def write_many(self, objects: list[Storable],
-                   valid_from: datetime | None = None) -> list[str]:
-        """Write multiple entities in a single transaction."""
-        return self._client.write_many(objects, valid_from=valid_from)
-
-    def update_many(self, objects: list[Storable],
-                    valid_from: datetime | None = None) -> None:
-        """Update multiple entities in a single transaction."""
-        self._client.update_many(objects, valid_from=valid_from)
-
     # ── Lifecycle ──────────────────────────────────────────────────
 
     def close(self) -> None:
         """Close the underlying connection and deactivate."""
         self.deactivate()
-        self._client.close()
+        if self.conn and not self.conn.closed:
+            self.conn.close()
 
     # Context-manager support
     def __enter__(self) -> UserConnection:
@@ -222,5 +176,5 @@ def connect(alias_or_host: str | None = None, *,
             event_bus=event_bus,
         )
 
-    conn.activate()
+
     return conn

@@ -7,7 +7,7 @@ No mocks.
 Covers:
 - Type mapping: infer_schema, extract_row
 - StoreBridge: register, table, event dispatch, predicate filters
-- Full round-trip: StoreClient.write() → PG NOTIFY → bridge → DH table
+- Full round-trip: Storable.save() → PG NOTIFY → bridge → DH table
 """
 
 import os
@@ -24,9 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 # DH JVM is started by conftest.py before test collection — safe to import.
 from bridge.store_bridge import StoreBridge
 from bridge.type_mapping import extract_row, infer_schema
-from store._client import StoreClient
 from store.admin import StoreServer
 from store.base import Storable
+from store.connection import UserConnection
 from store.subscriptions import ChangeEvent
 from streaming import flush as streaming_flush
 
@@ -85,7 +85,7 @@ def _provision_users(store_server):
 
 @pytest.fixture(scope="module")
 def client(conn_info, _provision_users):
-    c = StoreClient(
+    c = UserConnection(
         user="bridge_user", password="bridge_pw",
         host=conn_info["host"], port=conn_info["port"], dbname=conn_info["dbname"],
     )
@@ -136,7 +136,7 @@ class TestTypeMapping:
 
     def test_extract_row_values(self, client):
         w = Widget(name="bolt", color="silver", weight=0.5)
-        client.write(w)
+        w.save()
         columns = ["EntityId", "Version", "EventType", "State",
                     "UpdatedBy", "TxTime", "name", "color", "weight"]
         row = extract_row(w, columns)
@@ -189,15 +189,15 @@ class TestBridgeDH:
 
         # Manually emit a ChangeEvent to the bridge's internal bus
         # (bypasses PG NOTIFY — tests the dispatch logic directly)
-        client = StoreClient(
+        client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="gear", color="blue", weight=1.2)
-        client.write(w)
+        w.save()
 
-        # Start bridge (creates its own StoreClient for read-back)
+        # Start bridge (creates its own UserConnection for read-back)
         bridge.start()
 
         # Emit event manually
@@ -234,13 +234,13 @@ class TestBridgeDH:
         bridge.register(Widget)
         tbl = bridge.table(Widget)
 
-        client = StoreClient(
+        client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         g = Gadget(label="phone", price=999.0, quantity=5)
-        client.write(g)
+        g.save()
 
         bridge.start()
 
@@ -271,13 +271,13 @@ class TestBridgeDH:
         bridge.register(Widget, filter=lambda d: d.get("color") == "red")
         tbl = bridge.table(Widget)
 
-        client = StoreClient(
+        client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="valve", color="red", weight=0.3)
-        client.write(w)
+        w.save()
 
         bridge.start()
         event = ChangeEvent(
@@ -305,13 +305,13 @@ class TestBridgeDH:
         bridge.register(Widget, filter=lambda d: d.get("color") == "red")
         tbl = bridge.table(Widget)
 
-        client = StoreClient(
+        client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="pipe", color="green", weight=2.0)
-        client.write(w)
+        w.save()
 
         bridge.start()
         event = ChangeEvent(
@@ -340,13 +340,13 @@ class TestBridgeDH:
         bridge.register(Widget, columns=custom_schema)
         tbl = bridge.table(Widget)
 
-        client = StoreClient(
+        client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="nut", color="brass", weight=0.1)
-        client.write(w)
+        w.save()
 
         bridge.start()
         event = ChangeEvent(
@@ -372,7 +372,7 @@ class TestBridgeDH:
 class TestFullRoundTrip:
 
     def test_store_write_to_dh_table(self, conn_info, _provision_users):
-        """StoreClient.write() → PG NOTIFY → bridge → row in DH table."""
+        """Storable.save() → PG NOTIFY → bridge → row in DH table."""
         bridge = StoreBridge(
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
@@ -387,13 +387,13 @@ class TestFullRoundTrip:
         time.sleep(0.3)
 
         # Write via a SEPARATE client (simulates another process)
-        writer_client = StoreClient(
+        writer_client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="spring", color="steel", weight=0.05)
-        writer_client.write(w)
+        w.save()
 
         # Wait for NOTIFY → bridge dispatch → DH update
         time.sleep(1.0)
@@ -409,7 +409,7 @@ class TestFullRoundTrip:
         writer_client.close()
 
     def test_store_update_appends_to_dh_table(self, conn_info, _provision_users):
-        """StoreClient.update() → new row appends to DH table."""
+        """Storable.save() → new row appends to DH table."""
         bridge = StoreBridge(
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
@@ -421,18 +421,18 @@ class TestFullRoundTrip:
         tbl = bridge.table(Gadget)
         time.sleep(0.3)
 
-        writer_client = StoreClient(
+        writer_client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         g = Gadget(label="tablet", price=499.0, quantity=10)
-        writer_client.write(g)
+        g.save()
         time.sleep(1.0)
 
         # Update the gadget
         g.price = 449.0
-        writer_client.update(g)
+        g.save()
         time.sleep(1.0)
 
         # Both versions should be in the raw table
@@ -464,15 +464,15 @@ class TestFullRoundTrip:
         gadget_tbl = bridge.table(Gadget)
         time.sleep(0.3)
 
-        writer_client = StoreClient(
+        writer_client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w = Widget(name="cam", color="black", weight=0.8)
         g = Gadget(label="lens", price=200.0, quantity=3)
-        writer_client.write(w)
-        writer_client.write(g)
+        w.save()
+        g.save()
         time.sleep(1.0)
 
         # Widget table should have the widget, gadget table should have the gadget
@@ -501,18 +501,18 @@ class TestFullRoundTrip:
         live_tbl = raw_tbl.last_by("EntityId")
         time.sleep(0.3)
 
-        writer_client = StoreClient(
+        writer_client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
 
         w = Widget(name="shaft", color="grey", weight=3.0)
-        writer_client.write(w)
+        w.save()
         time.sleep(1.0)
 
         w.color = "chrome"
-        writer_client.update(w)
+        w.save()
         time.sleep(1.0)
 
         # Raw table has 2 rows, live table has 1 (latest)
@@ -540,13 +540,13 @@ class TestFullRoundTrip:
         tbl1 = bridge1.table(Widget)
         time.sleep(0.3)
 
-        writer_client = StoreClient(
+        writer_client = UserConnection(
             user="bridge_user", password="bridge_pw",
             host=conn_info["host"], port=conn_info["port"],
             dbname=conn_info["dbname"],
         )
         w1 = Widget(name="pin1", color="gold", weight=0.01)
-        writer_client.write(w1)
+        w1.save()
         time.sleep(1.0)
 
         _flush_dh()
@@ -569,7 +569,7 @@ class TestFullRoundTrip:
 
         # Write a NEW event
         w2 = Widget(name="pin2", color="silver", weight=0.02)
-        writer_client.write(w2)
+        w2.save()
         time.sleep(1.0)
 
         # tbl2 should have pin2 but NOT pin1 (checkpoint skipped it)

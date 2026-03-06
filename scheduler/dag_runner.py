@@ -17,7 +17,6 @@ from workflow.engine import WorkflowEngine
 from scheduler.dag import execution_order, get_task
 from scheduler.models import Run, Schedule, Task, TaskResult
 from scheduler.resolve import resolve_fn
-from store import UserConnection
 
 logger = logging.getLogger(__name__)
 
@@ -30,15 +29,13 @@ class DAGRunner:
     If a task fails, its dependents are marked SKIPPED.
     """
 
-    def __init__(self, engine: WorkflowEngine, client: UserConnection, max_workers: int = 4) -> None:
+    def __init__(self, engine: WorkflowEngine, max_workers: int = 4) -> None:
         """
         Args:
             engine: WorkflowEngine instance.
-            client: UserConnection instance.
             max_workers: Max parallel tasks per level.
         """
         self._engine = engine
-        self._client = client
         self._max_workers = max_workers
 
     def run(

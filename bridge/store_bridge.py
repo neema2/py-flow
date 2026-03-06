@@ -92,7 +92,7 @@ class StoreBridge:
         self._conn: Any = None  # set in start()
         self._started = False
 
-    def _require_client(self) -> Any:
+    def _require_connection(self) -> Any:
         assert self._conn is not None, "StoreBridge not started"
         return self._conn
 
@@ -219,8 +219,9 @@ class StoreBridge:
             return  # Not a registered type — ignore
 
         try:
-            # Read back the full object from the store
-            obj = self._require_client().read(reg.read_cls, event.entity_id)
+            # Activate bridge connection in this thread (may be listener's bg thread)
+            self._conn.activate()
+            obj = reg.read_cls.find(event.entity_id)
         except Exception:
             return  # Object not readable (deleted, permission, etc.)
 

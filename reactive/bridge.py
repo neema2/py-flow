@@ -48,7 +48,7 @@ def auto_persist_effect(obj: Any, store_conn: UserConnection | None = None) -> l
             def effect_fn() -> None:
                 _value = comp()
                 try:
-                    store_conn.update(obj)
+                    obj.save()
                 except Exception:
                     logger.exception(
                         f"auto_persist for {computed_name} failed"

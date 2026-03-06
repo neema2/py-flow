@@ -4,7 +4,7 @@ Tests for the workflow orchestration layer.
 Covers:
 - WorkflowEngine ABC contract
 - DBOSEngine: lifecycle, workflows, steps, queues, send/recv, status
-- Integration with StoreClient (durable multi-step mutations)
+- Integration with UserConnection (durable multi-step mutations)
 """
 
 import tempfile
@@ -12,9 +12,10 @@ import time
 from dataclasses import dataclass
 
 import pytest
-from store._client import StoreClient
 from store.admin import StoreServer
 from store.base import Storable
+from store.connection import UserConnection
+from store.state_machine import StateMachine, Transition
 from workflow.engine import WorkflowEngine, WorkflowHandle, WorkflowStatus
 from workflow.factory import create_engine
 
@@ -23,7 +24,7 @@ from workflow.factory import create_engine
 # ---------------------------------------------------------------------------
 
 _engine: WorkflowEngine | None = None
-_client: StoreClient | None = None
+_client: UserConnection | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ def _provision_users(server):
 @pytest.fixture(scope="module")
 def client(conn_info, _provision_users):
     global _client
-    c = StoreClient(
+    c = UserConnection(
         user="wf_alice", password="pass_alice",
         host=conn_info["host"], port=conn_info["port"], dbname=conn_info["dbname"],
     )
@@ -83,10 +84,21 @@ class Counter(Storable):
     value: float = 0
 
 
+class TicketLifecycle(StateMachine):
+    initial = "ACTIVE"
+    transitions = [
+        Transition("ACTIVE", "IN_PROGRESS"),
+        Transition("ACTIVE", "CLOSED"),
+        Transition("IN_PROGRESS", "CLOSED"),
+    ]
+
+
 @dataclass
 class Ticket(Storable):
     title: str = ""
     status: str = "OPEN"
+
+Ticket._state_machine = TicketLifecycle
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +278,7 @@ class TestSendRecv:
 
 
 # ---------------------------------------------------------------------------
-# StoreClient integration
+# UserConnection integration
 # ---------------------------------------------------------------------------
 
 class TestStoreIntegration:
@@ -275,13 +287,13 @@ class TestStoreIntegration:
     def test_multi_step_store_workflow(self, engine, client):
         def create_counter(name, initial):
             c = Counter(name=name, value=initial)
-            _client.write(c)  # type: ignore[union-attr]
+            c.save()  # type: ignore[union-attr]
             return c.entity_id
 
         def increment_counter(entity_id, amount):
-            c = _client.read(Counter, entity_id)  # type: ignore[union-attr]
+            c = Counter.find(entity_id)  # type: ignore[union-attr]
             c.value += amount  # type: ignore[union-attr]
-            _client.update(c)  # type: ignore[arg-type, union-attr]
+            c.save()  # type: ignore[union-attr]
             return c.value  # type: ignore[union-attr]
 
         def create_and_increment():
@@ -294,14 +306,14 @@ class TestStoreIntegration:
         assert result["final_value"] == 15
 
         # Verify in store
-        obj = client.read(Counter, result["entity_id"])
+        obj = Counter.get(result["entity_id"])
         assert obj.value == 15
         assert obj.name == "hits"
 
     def test_workflow_with_error_in_step(self, engine, client):
         def create_ticket():
             t = Ticket(title="Bug report")
-            _client.write(t)  # type: ignore[union-attr]
+            t.save()  # type: ignore[union-attr]
             return t.entity_id
 
         def failing_step():
@@ -314,3 +326,42 @@ class TestStoreIntegration:
 
         with pytest.raises(Exception):
             engine.run(flawed_workflow)
+
+
+# ---------------------------------------------------------------------------
+# Durable transition (engine convenience + WorkflowDispatcher)
+# ---------------------------------------------------------------------------
+
+class TestDurableTransition:
+    """engine.durable_transition() and WorkflowDispatcher.durable_transition()."""
+
+    def test_engine_durable_transition(self, engine, client):
+        """engine.durable_transition() transitions state via checkpointed step."""
+        t = Ticket(title="durable_ticket")
+        t.save()
+        t = Ticket.get(t.entity_id)  # type: ignore[arg-type]
+        assert t.state == "ACTIVE"
+
+        def transition_workflow():
+            _engine.durable_transition(t, "CLOSED")  # type: ignore[union-attr]
+
+        engine.run(transition_workflow)
+        refreshed = Ticket.get(t.entity_id)  # type: ignore[arg-type]
+        assert refreshed.state == "CLOSED"
+
+    def test_dispatcher_durable_transition(self, engine, client):
+        """WorkflowDispatcher wraps transition in a checkpointed step."""
+        from workflow.dispatcher import WorkflowDispatcher
+
+        dispatcher = WorkflowDispatcher(engine)
+        t = Ticket(title="dispatch_ticket")
+        t.save()
+        t = Ticket.get(t.entity_id)  # type: ignore[arg-type]
+        assert t.state == "ACTIVE"
+
+        def dispatch_workflow():
+            dispatcher.durable_transition(t, "CLOSED")
+
+        engine.run(dispatch_workflow)
+        refreshed = Ticket.get(t.entity_id)  # type: ignore[arg-type]
+        assert refreshed.state == "CLOSED"

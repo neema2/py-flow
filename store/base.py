@@ -21,15 +21,13 @@ from collections import namedtuple
 from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, ClassVar, Self
-
-if TYPE_CHECKING:
-    from store._client import QueryResult, StoreClient
+from typing import Any, ClassVar
 
 from reaktiv import Computed, Effect, Signal, batch
 from reaktiv.signal import ComputeSignal as _ComputeSignal
 from workflow.engine import WorkflowEngine
 
+from store._active_record import ActiveRecordMixin
 from store.registry import ColumnRegistry
 from store.state_machine import StateMachine
 
@@ -73,7 +71,7 @@ def _json_decoder_hook(d: dict) -> Any:
     return d
 
 
-class Storable:
+class Storable(ActiveRecordMixin):
     """
     Base class for objects stored in the bi-temporal event-sourced object store.
 
@@ -86,11 +84,12 @@ class Storable:
             price: float
             side: str
 
-    Then use StoreClient to persist:
+    Then persist with Active Record methods:
 
-        client.write(Trade(symbol="AAPL", quantity=100, price=228.0, side="BUY"))
+        trade = Trade(symbol="AAPL", quantity=100, price=228.0, side="BUY")
+        trade.save()
 
-    Every write/update creates an immutable event with bi-temporal timestamps.
+    Every save/update creates an immutable event with bi-temporal timestamps.
     """
 
     # Bi-temporal metadata — set by the store after writing / reading
@@ -340,119 +339,7 @@ class Storable:
         """The type identifier stored in the database."""
         return f"{cls.__module__}.{cls.__qualname__}"
 
-    # ── Active Record API ─────────────────────────────────────────────
 
-    @staticmethod
-    def _get_client() -> "StoreClient":
-        """Return the StoreClient from the active UserConnection."""
-        from store.connection import active_connection
-        return active_connection()._client
-
-    @staticmethod
-    def _get_conn() -> Any:
-        """Return the raw psycopg2 connection from the active UserConnection."""
-        from store.connection import active_connection
-        return active_connection().conn
-
-    def save(self, valid_from: datetime | None = None) -> str:
-        """Persist this object: create if new, update if existing.
-
-        Returns entity_id on first save.
-        """
-        client = self._get_client()
-        if self._store_entity_id is None:
-            return client.write(self, valid_from=valid_from)
-        else:
-            client.update(self, valid_from=valid_from)
-            return self._store_entity_id
-
-    def delete(self) -> bool:
-        """Soft-delete this object (DELETED tombstone)."""
-        client = self._get_client()
-        return client.delete(self)
-
-    def transition(self, new_state: str, valid_from: datetime | None = None) -> None:
-        """Transition to a new lifecycle state."""
-        client = self._get_client()
-        client.transition(self, new_state, valid_from=valid_from)
-
-    def refresh(self) -> None:
-        """Reload this object's data from the store (latest version)."""
-        if not self._store_entity_id:
-            raise ValueError("Object has no entity_id — save() it first")
-        client = self._get_client()
-        fresh = client.read(type(self), self._store_entity_id)
-        if fresh is None:
-            raise ValueError(
-                f"Entity {self._store_entity_id} not found or deleted"
-            )
-        # Copy all data fields — use setattr so reactive Signals update
-        if dataclasses.is_dataclass(self):
-            for f in dataclasses.fields(self):  # type: ignore[unreachable]
-                setattr(self, f.name, getattr(fresh, f.name))
-        # Copy store metadata
-        for attr in ('_store_entity_id', '_store_version', '_store_owner',
-                     '_store_updated_by', '_store_tx_time', '_store_valid_from',
-                     '_store_valid_to', '_store_state', '_store_event_type'):
-            object.__setattr__(self, attr, getattr(fresh, attr))
-
-    def history(self) -> list:
-        """Return all versions of this entity."""
-        if not self._store_entity_id:
-            raise ValueError("Object has no entity_id — save() it first")
-        client = self._get_client()
-        return client.history(type(self), self._store_entity_id)
-
-    def audit(self) -> list[dict]:
-        """Return the full audit trail for this entity."""
-        if not self._store_entity_id:
-            raise ValueError("Object has no entity_id — save() it first")
-        client = self._get_client()
-        return client.audit(self._store_entity_id)
-
-    def share(self, user: str, mode: str = "read") -> bool:
-        """Grant access to another user. mode='read' or 'write'."""
-        if not self._store_entity_id:
-            raise ValueError("Object has no entity_id — save() it first")
-        from store.permissions import share_read, share_write
-        conn = self._get_conn()
-        if mode == "write":
-            return share_write(conn, self._store_entity_id, user)
-        return share_read(conn, self._store_entity_id, user)
-
-    def unshare(self, user: str, mode: str = "read") -> bool:
-        """Revoke access from another user. mode='read' or 'write'."""
-        if not self._store_entity_id:
-            raise ValueError("Object has no entity_id — save() it first")
-        from store.permissions import unshare_read, unshare_write
-        conn = self._get_conn()
-        if mode == "write":
-            return unshare_write(conn, self._store_entity_id, user)
-        return unshare_read(conn, self._store_entity_id, user)
-
-    @classmethod
-    def find(cls, entity_id: str) -> Self | None:
-        """Read the latest non-deleted version of an entity by ID."""
-        client = cls._get_client()
-        return client.read(cls, entity_id)
-
-    @classmethod
-    def query(cls, filters: dict | None = None, limit: int = 100, cursor: Any = None) -> "QueryResult[Self]":
-        """Query current entities of this type with optional filters."""
-        client = cls._get_client()
-        return client.query(cls, filters=filters, limit=limit, cursor=cursor)
-
-    @classmethod
-    def count(cls) -> int:
-        """Count current (latest non-deleted) entities of this type."""
-        client = cls._get_client()
-        return client.count(cls)
-
-    @classmethod
-    def as_of(cls, entity_id: str, *, tx_time: datetime | None = None, valid_time: datetime | None = None) -> Self | None:
-        """Bi-temporal point-in-time query."""
-        client = cls._get_client()
-        return client.as_of(cls, entity_id, tx_time=tx_time, valid_time=valid_time)
 
 
 class Embedded(Storable):

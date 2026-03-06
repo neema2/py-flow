@@ -126,7 +126,7 @@ class AgentMemory:
 
         if self._conn is not None:
             # Check if conversation already exists
-            existing = self._conn.read(Conversation, conversation_id)
+            existing = Conversation.find(conversation_id)
             if existing is not None:
                 # Update existing conversation
                 existing.messages = msg_dicts
@@ -134,7 +134,7 @@ class AgentMemory:
                 existing.message_count = len(msg_dicts)
                 existing.metadata = metadata or existing.metadata
                 existing.agent_name = agent_name or existing.agent_name
-                self._conn.update(existing)
+                existing.save()
                 return existing
             else:
                 # Create new conversation with the provided ID
@@ -146,7 +146,7 @@ class AgentMemory:
                     metadata=metadata or {},
                 )
                 convo._store_entity_id = conversation_id
-                self._conn.write(convo)
+                convo.save()
                 return convo
         else:
             # No connection — return an in-memory conversation
@@ -165,7 +165,7 @@ class AgentMemory:
         if self._conn is None:
             return None
         try:
-            return self._conn.read(Conversation, conversation_id)
+            return Conversation.find(conversation_id)
         except Exception as e:
             logger.warning("Failed to load conversation %s: %s", conversation_id, e)
             return None
@@ -182,7 +182,7 @@ class AgentMemory:
             filters = {}
             if agent_name:
                 filters["agent_name"] = agent_name
-            result = self._conn.query(Conversation, filters=filters or None, limit=limit)
+            result = Conversation.query(filters=filters or None, limit=limit)
             return list(result.items)
         except Exception as e:
             logger.warning("Failed to list conversations: %s", e)
@@ -193,10 +193,10 @@ class AgentMemory:
         if self._conn is None:
             return False
         try:
-            convo = self._conn.read(Conversation, conversation_id)
+            convo = Conversation.find(conversation_id)
             if convo is None:
                 return False
-            self._conn.delete(convo)
+            convo.delete()
             return True
         except Exception as e:
             logger.warning("Failed to delete conversation %s: %s", conversation_id, e)

@@ -2,7 +2,7 @@
 Zero-trust Python object store backed by PostgreSQL JSONB + Row-Level Security.
 """
 
-from store._client import VersionConflict
+from store._active_record import VersionConflict
 from store.base import Embedded, Storable
 from store.columns import REGISTRY
 from store.connection import UserConnection, active_connection, connect

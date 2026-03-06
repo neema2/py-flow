@@ -1,9 +1,7 @@
 """
 QueryResult — paginated query result container.
 
-Extracted from _client.py to break the base ↔ _client import cycle.
-Both base.py (for Storable.query return type) and _client.py (for
-StoreClient.query implementation) import from here.
+Used by ActiveRecordMixin.query() and Storable.query() for return types.
 """
 
 from __future__ import annotations

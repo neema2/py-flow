@@ -2,7 +2,7 @@
 Tests for the scheduler package.
 
 Covers:
-- Embedded base class (reactive wiring, StoreClient.write() guard)
+- Embedded base class (reactive wiring, Storable.save() guard)
 - Models: Schedule, Task, Run, TaskResult (serialization, state machines)
 - Cron: next_fire, prev_fire, is_due, validate, describe
 - DAG graph: acyclicity, execution_order, cycle detection
@@ -307,7 +307,7 @@ class TestDAGRunner:
             Task(name="b", fn=f"{self.FX}:fn_return_b", depends_on=["a"]),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.task_results["a"].status == "SUCCESS"
@@ -324,7 +324,7 @@ class TestDAGRunner:
             Task(name="c", fn=f"{self.FX}:fn_return_c", depends_on=["a", "b"]),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.task_results["a"].status == "SUCCESS"
@@ -341,7 +341,7 @@ class TestDAGRunner:
             Task(name="b", fn=f"{self.FX}:fn_never", depends_on=["a"]),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.task_results["a"].status == "ERROR"
@@ -356,7 +356,7 @@ class TestDAGRunner:
             Task(name="a", fn="nonexistent.module:fn"),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.task_results["a"].status == "ERROR"
@@ -371,7 +371,7 @@ class TestDAGRunner:
             Task(name="c", fn=f"{self.FX}:fn_return_c"),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert "a" in run.task_results
@@ -386,7 +386,7 @@ class TestDAGRunner:
             Task(name="slow", fn=f"{self.FX}:fn_slow"),
         ])
 
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.task_results["slow"].duration_ms >= 40  # at least 40ms
@@ -396,7 +396,7 @@ class TestDAGRunner:
         from scheduler.models import Schedule
 
         s = Schedule(name="empty", tasks=[])
-        runner = DAGRunner(engine=None, client=None)  # type: ignore[arg-type]
+        runner = DAGRunner(engine=None)  # type: ignore[arg-type]
         run = runner.run(s)
 
         assert run.result == "empty"
@@ -453,7 +453,7 @@ class TestDecorators:
 
 
 class TestSchedulerIntegration:
-    """Integration tests with real StoreServer + StoreClient."""
+    """Integration tests with real StoreServer + UserConnection."""
 
     @pytest.fixture(scope="class")
     def store_server(self):
@@ -467,9 +467,9 @@ class TestSchedulerIntegration:
 
     @pytest.fixture
     def client(self, store_server):
-        from store._client import StoreClient
+        from store.connection import UserConnection
         info = store_server.conn_info()
-        return StoreClient(
+        return UserConnection(
             host=info["host"],
             port=info["port"],
             dbname=info["dbname"],
@@ -478,11 +478,11 @@ class TestSchedulerIntegration:
         )
 
     def test_embedded_write_guard(self, client):
-        """StoreClient.write() should refuse Embedded subclasses."""
+        """Storable.save() should refuse Embedded subclasses."""
         from scheduler.models import Task
         td = Task(name="test", fn="mod:fn")
         with pytest.raises(TypeError, match="Embedded"):
-            client.write(td)
+            td.save()
 
     def test_schedule_write_read(self, client):
         """Write and read back a Schedule."""
@@ -490,9 +490,9 @@ class TestSchedulerIntegration:
         s = Schedule(name="test_sched", cron_expr="*/5 * * * *", tasks=[
             Task(name="do_it", fn="tests._sched_fixtures:fn_ok"),
         ])
-        entity_id = client.write(s)
+        entity_id = s.save()
         assert entity_id is not None
-        s2 = client.read(Schedule, entity_id)
+        s2 = Schedule.get(entity_id)
         assert s2.name == "test_sched"
         assert s2.state == "ACTIVE"
 
@@ -500,13 +500,13 @@ class TestSchedulerIntegration:
         """Test Schedule state machine transitions."""
         from scheduler.models import Schedule
         s = Schedule(name="pausable", cron_expr="0 * * * *")
-        client.write(s)
+        s.save()
         assert s.state == "ACTIVE"
 
-        client.transition(s, "PAUSED")
+        s.transition("PAUSED")
         assert s.state == "PAUSED"
 
-        client.transition(s, "ACTIVE")
+        s.transition("ACTIVE")
         assert s.state == "ACTIVE"
 
     def test_schedule_write_read_with_tasks(self, client):
@@ -520,8 +520,8 @@ class TestSchedulerIntegration:
                 Task(name="step2", fn="mod:fn2", depends_on=["step1"]),
             ],
         )
-        entity_id = client.write(s)
-        s2 = client.read(Schedule, entity_id)
+        entity_id = s.save()
+        s2 = Schedule.get(entity_id)
         assert s2.name == "test_pipeline"
         assert len(s2.tasks) == 2
         # After read, tasks are dicts — use task_defs property
@@ -533,13 +533,13 @@ class TestSchedulerIntegration:
         """Test Run state machine: PENDING → RUNNING → SUCCESS."""
         from scheduler.models import Run
         r = Run(schedule_name="test")
-        client.write(r)
+        r.save()
         assert r.state == "PENDING"
 
-        client.transition(r, "RUNNING")
+        r.transition("RUNNING")
         assert r.state == "RUNNING"
 
-        client.transition(r, "SUCCESS")
+        r.transition("SUCCESS")
         assert r.state == "SUCCESS"
 
     def test_run_write_with_task_results(self, client):
@@ -551,8 +551,8 @@ class TestSchedulerIntegration:
                 "extract": TaskResult(task_name="extract", status="SUCCESS", duration_ms=100),
             },
         )
-        entity_id = client.write(r)
-        r2 = client.read(Run, entity_id)
+        entity_id = r.save()
+        r2 = Run.get(entity_id)
         assert "extract" in r2.task_results
 
     def test_scheduler_register_and_fire(self, client):
@@ -565,7 +565,7 @@ class TestSchedulerIntegration:
         server = SchedulerServer.__new__(SchedulerServer)
         server._conn = client
         server._engine = None
-        server._dag_runner = DAGRunner(None, client)  # type: ignore[arg-type]
+        server._dag_runner = DAGRunner(None)  # type: ignore[arg-type]
         server._last_fire = {}
         server._running = False
         server._thread = None
@@ -590,7 +590,7 @@ class TestSchedulerIntegration:
         server = SchedulerServer.__new__(SchedulerServer)
         server._conn = client
         server._engine = None
-        server._dag_runner = DAGRunner(None, client)  # type: ignore[arg-type]
+        server._dag_runner = DAGRunner(None)  # type: ignore[arg-type]
         server._last_fire = {}
         server._running = False
         server._thread = None
@@ -616,7 +616,7 @@ class TestSchedulerIntegration:
         server = SchedulerServer.__new__(SchedulerServer)
         server._conn = client
         server._engine = None
-        server._dag_runner = DAGRunner(None, client)  # type: ignore[arg-type]
+        server._dag_runner = DAGRunner(None)  # type: ignore[arg-type]
         server._last_fire = {}
         server._running = False
         server._thread = None
