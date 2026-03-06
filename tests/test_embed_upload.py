@@ -18,50 +18,27 @@ requires_gemini = pytest.mark.skipif(not GEMINI_API_KEY, reason="GEMINI_API_KEY 
 
 
 @pytest.fixture(scope="module")
-def pg_server():
-    """Start embedded PG with search + chunks schema."""
-    import tempfile
-
+def _embed_server(store_server):
+    """Delegate to session-scoped store_server, add embed-specific bootstrap."""
     from media.models import bootstrap_chunks_schema, bootstrap_search_schema
-    from store.admin import StoreServer
-    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_embed_upload_"))
-    server.start()
-    server.provision_user("emb_user", "emb_pw")
+    store_server.provision_user("emb_user", "emb_pw")
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_search_schema(conn, embedding_dim=768)
     conn.close()
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_chunks_schema(conn, embedding_dim=768)
     conn.close()
 
-    yield server
-    server.stop()
+    return store_server
 
 
 @pytest.fixture(scope="module")
-def s3_server():
-    """Start S3-compatible object store."""
-    import tempfile
-
-    import objectstore
-    loop = asyncio.new_event_loop()
-    store = loop.run_until_complete(objectstore.configure(
-        "minio",
-        data_dir=tempfile.mkdtemp(prefix="test_embed_s3_"),
-        api_port=9022,
-        console_port=9023,
-    ))
-    yield store
-    # atexit handles cleanup
-
-
-@pytest.fixture(scope="module")
-def store_conn(pg_server):
+def store_conn(_embed_server):
     """Connect as emb_user."""
     from store.connection import connect
-    info = pg_server.conn_info()
+    info = _embed_server.conn_info()
     conn = connect(user="emb_user", host=info["host"], port=info["port"],
                    dbname=info["dbname"], password="emb_pw")
     yield conn
@@ -69,11 +46,11 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store_no_embed(s3_server, store_conn):
+def media_store_no_embed(media_server, store_conn):
     """MediaStore WITHOUT embedding provider."""
     from media import MediaStore
     ms = MediaStore(
-        s3_endpoint="localhost:9022",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-embed",
@@ -83,7 +60,7 @@ def media_store_no_embed(s3_server, store_conn):
 
 
 @pytest.fixture(scope="module")
-def media_store_with_embed(s3_server, store_conn):
+def media_store_with_embed(media_server, store_conn):
     """MediaStore WITH Gemini embedding provider."""
     if not GEMINI_API_KEY:
         pytest.skip("GEMINI_API_KEY not set")
@@ -93,7 +70,7 @@ def media_store_with_embed(s3_server, store_conn):
 
     ai = AI(api_key=GEMINI_API_KEY, embedding_dim=768)
     ms = MediaStore(
-        s3_endpoint="localhost:9022",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-embed",
@@ -104,9 +81,9 @@ def media_store_with_embed(s3_server, store_conn):
 
 
 @pytest.fixture(scope="module")
-def admin_db(pg_server):
+def admin_db(_embed_server):
     """Fresh admin connection for verification queries."""
-    conn = pg_server.admin_conn()
+    conn = _embed_server.admin_conn()
     yield conn
     conn.close()
 

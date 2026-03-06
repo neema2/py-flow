@@ -59,26 +59,16 @@ class Order(Storable):
 
 
 @pytest.fixture(scope="module")
-def server():
-    """Start the Storable object store (pgserver with RLS)."""
-    tmp_dir = tempfile.mkdtemp(prefix="test_lakehouse_store_")
-    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
-    srv.start()
-    srv.provision_user("alice", "alice_pw")
-    yield srv
-    srv.stop()
+def server(store_server):
+    """Delegate to session-scoped store_server from conftest.py."""
+    store_server.provision_user("alice", "alice_pw")
+    return store_server
 
 
 @pytest.fixture(scope="module")
-def stack():
-    """Start the lakehouse stack (PG + Lakekeeper + object store)."""
-    from lakehouse.admin import LakehouseServer
-    # Use /tmp to keep Unix socket path < 103 bytes (macOS limit)
-    tmp_dir = tempfile.mkdtemp(prefix="tst_lh_", dir="/tmp")
-    srv = LakehouseServer(data_dir=tmp_dir)
-    asyncio.run(srv.start())
-    yield srv
-    asyncio.run(srv.stop())
+def stack(lakehouse_server):
+    """Delegate to session-scoped lakehouse_server from conftest.py."""
+    return lakehouse_server
 
 
 @pytest.fixture(scope="module")

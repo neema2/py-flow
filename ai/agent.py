@@ -191,9 +191,10 @@ class Agent:
                 temperature=self._temperature,
             )
 
-            # Accumulate usage
+            # Accumulate usage (skip None values — Gemini API occasionally omits counts)
             for k, v in response.usage.items():
-                total_usage[k] = total_usage.get(k, 0) + v
+                if v is not None:
+                    total_usage[k] = total_usage.get(k, 0) + v
 
             if not response.tool_calls:
                 # Final text response

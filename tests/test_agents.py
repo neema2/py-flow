@@ -268,23 +268,19 @@ class TestAgentIntegration:
 class TestAgentMemory:
 
     @pytest.fixture
-    def pg_and_memory(self):
+    def pg_and_memory(self, store_server):
         from ai.memory import AgentMemory
-        from store.admin import StoreServer
 
-        server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_agent_mem_"))
-        server.start()
-        server.provision_user("agent_user", "agent_pw")
+        store_server.provision_user("agent_user", "agent_pw")
 
         from store.connection import connect
-        info = server.conn_info()
+        info = store_server.conn_info()
         conn = connect(user="agent_user", host=info["host"], port=info["port"],
                        dbname=info["dbname"], password="agent_pw")
 
         memory = AgentMemory(store_conn=conn)
         yield memory, conn
         conn.close()
-        server.stop()
 
     def test_save_load_conversation(self, pg_and_memory):
         """Save and load a conversation from PG."""

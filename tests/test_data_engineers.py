@@ -94,16 +94,11 @@ def codegen_env(tmp_path):
 
 
 @pytest.fixture(scope="module")
-def store_server():
-    """Start a real embedded Postgres for OLTP e2e tests."""
-    from store.admin import StoreServer
-    tmp_dir = tempfile.mkdtemp(prefix="test_agents_")
-    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
-    srv.start()
-    srv.provision_user("agent_user", "agent_pw")
-    srv.register_alias("agent_test")
-    yield srv
-    srv.stop()
+def _de_store(store_server):
+    """Delegate to session-scoped store_server from conftest.py."""
+    store_server.provision_user("agent_user", "agent_pw")
+    store_server.register_alias("agent_test")
+    return store_server
 
 
 def _get_tool(tools, name):
@@ -280,45 +275,26 @@ class TestOLTPCodegen:
 
 
 @pytest.fixture(scope="module")
-def lakehouse_stack():
-    """Start the lakehouse stack (PG + Lakekeeper + S3 object store)."""
-    from lakehouse.admin import LakehouseServer
-    tmp_dir = tempfile.mkdtemp(prefix="tst_ag_lh_", dir="/tmp")
-    srv = LakehouseServer(data_dir=tmp_dir)
-    asyncio.run(srv.start())
-    srv.register_alias("agent_test")
-    yield srv
-    asyncio.run(srv.stop())
+def lakehouse_stack(lakehouse_server):
+    """Delegate to session-scoped lakehouse_server from conftest.py."""
+    lakehouse_server.register_alias("agent_test")
+    return lakehouse_server
 
 
 @pytest.fixture(scope="module")
-def media_s3():
-    """Start S3-compatible object store for MediaStore."""
-    import objectstore
-    loop = asyncio.new_event_loop()
-    store = loop.run_until_complete(objectstore.configure(
-        "minio",
-        data_dir=tempfile.mkdtemp(prefix="tst_ag_s3_"),
-        api_port=9032,
-        console_port=9033,
-    ))
-    yield store
-
-
-@pytest.fixture(scope="module")
-def media_store_fixture(store_server, media_s3):
-    """MediaStore backed by real StoreServer + real MinIO."""
+def media_store_fixture(_de_store, media_server):
+    """MediaStore backed by real StoreServer + real MinIO (shared)."""
     from media import MediaStore
     from media.models import bootstrap_search_schema
 
     # Bootstrap search schema
-    admin_conn = store_server.admin_conn()
+    admin_conn = _de_store.admin_conn()
     bootstrap_search_schema(admin_conn)
     admin_conn.close()
 
     # Connect as user so MediaStore has a store connection
     from store.connection import connect
-    info = store_server.conn_info()
+    info = _de_store.conn_info()
     conn = connect(host=info["host"], port=info["port"], dbname=info["dbname"],
                    user="agent_user", password="agent_pw")
 
@@ -326,14 +302,14 @@ def media_store_fixture(store_server, media_s3):
     from media._registry import register_alias as _register_media_alias
     _register_media_alias(
         "agent_test",
-        endpoint="localhost:9032",
+        endpoint="localhost:9102",
         access_key="minioadmin",
         secret_key="minioadmin",
         bucket="test-agent-media",
     )
 
     ms = MediaStore(
-        s3_endpoint="localhost:9032",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-agent-media",
@@ -349,7 +325,7 @@ def media_store_fixture(store_server, media_s3):
 class TestOLTPEndToEnd:
     """Real StoreServer → create dataset → insert records → query back."""
 
-    def test_create_and_query_round_trip(self, store_server, codegen_env):
+    def test_create_and_query_round_trip(self, _de_store, codegen_env):
         _col_dir, _mod_dir = codegen_env
 
         ctx = _PlatformContext(
@@ -388,7 +364,7 @@ class TestOLTPEndToEnd:
         symbols = {r["e2e_symbol"] for r in query_result["rows"]}
         assert symbols == {"AAPL", "GOOGL", "MSFT"}
 
-    def test_insert_unknown_type_rejected(self, store_server, codegen_env):
+    def test_insert_unknown_type_rejected(self, _de_store, codegen_env):
         ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
         insert_fn = _get_tool(create_oltp_tools(ctx), "insert_records")
         result = json.loads(insert_fn(
@@ -397,7 +373,7 @@ class TestOLTPEndToEnd:
         ))
         assert "error" in result
 
-    def test_query_unknown_type_rejected(self, store_server, codegen_env):
+    def test_query_unknown_type_rejected(self, _de_store, codegen_env):
         ctx = _PlatformContext(alias="agent_test", user="agent_user", password="agent_pw")
         query_fn = _get_tool(create_oltp_tools(ctx), "query_dataset")
         result = json.loads(query_fn(type_name="NonExistent"))

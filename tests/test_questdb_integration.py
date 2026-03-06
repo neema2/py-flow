@@ -38,16 +38,17 @@ class TestQuestDBBackendRoundTrip:
     """Write ticks via ILP, read them back via PGWire. The real pipeline."""
 
     @pytest.fixture(scope="class")
-    def backend(self, tmp_path_factory):
-        tmp_dir = str(tmp_path_factory.mktemp("test_questdb"))
+    def backend(self, tsdb_server):
+        """Create backend client connecting to session-scoped tsdb_server's QuestDB."""
         b = create_backend(
             "questdb",
-            data_dir=tmp_dir,
-            http_port=19100,
-            ilp_port=19109,
-            pg_port=18912,
+            host=tsdb_server.host,
+            http_port=tsdb_server.http_port,
+            ilp_port=tsdb_server.ilp_port,
+            pg_port=tsdb_server.pg_port,
+            auto_start=False,  # don't start new QuestDB — connect to existing
         )
-        asyncio.run(b.start())
+        asyncio.run(b.start())  # opens reader/writer connections only
         yield b
         asyncio.run(b.stop())
 

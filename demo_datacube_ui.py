@@ -2,7 +2,7 @@
 Datacube UI demo — NYC Yellow Taxi data.
 
 Usage:
-    python demos/demo_datacube_ui.py
+    python demo_datacube_ui.py
 
 Opens a browser with an interactive Perspective grid.
 All pivoting, filtering, and aggregation is done via DuckDB SQL pushdown.

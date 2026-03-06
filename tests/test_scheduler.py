@@ -456,14 +456,10 @@ class TestSchedulerIntegration:
     """Integration tests with real StoreServer + UserConnection."""
 
     @pytest.fixture(scope="class")
-    def store_server(self):
-        from store.admin import StoreServer
-        tmp = tempfile.mkdtemp(prefix="test_scheduler_")
-        srv = StoreServer(data_dir=tmp)
-        srv.start()
-        srv.provision_user("sched_user", "sched_pw")
-        yield srv
-        srv.stop()
+    def store_server(self, store_server):
+        """Delegate to session-scoped store_server from conftest.py."""
+        store_server.provision_user("sched_user", "sched_pw")
+        return store_server
 
     @pytest.fixture
     def client(self, store_server):
@@ -682,18 +678,10 @@ class TestSchedulerFullStack:
     FX = "tests._sched_fixtures"
 
     @pytest.fixture(scope="class")
-    def full_stack(self):
-        """Start self-contained SchedulerServer and alias-based Scheduler."""
-        from scheduler.admin import SchedulerServer
-
-        tmp = tempfile.mkdtemp(prefix="test_sched_fullstack_")
-        server = SchedulerServer(data_dir=tmp)
-        server.start(poll_interval=0)
-        server.register_alias("test-fullstack")
-
-        yield {"server": server}
-
-        server.stop()
+    def full_stack(self, scheduler_server):
+        """Delegate to session-scoped scheduler_server from conftest.py."""
+        scheduler_server.register_alias("test-fullstack")
+        yield {"server": scheduler_server}
 
     @pytest.fixture
     def scheduler(self, full_stack):

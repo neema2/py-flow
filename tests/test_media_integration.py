@@ -13,41 +13,18 @@ import pytest
 
 
 @pytest.fixture(scope="session")
-def pg_server():
-    """Start an embedded PG server for the media tests."""
-    import tempfile
+def _provision_media_user(store_server):
+    """Provision media_user on the shared store_server."""
+    store_server.provision_user("media_user", "media_pw")
+    return store_server
 
-    from store.admin import StoreServer
-    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_media_store_"))
-    server.start()
-    server.provision_user("media_user", "media_pw")
-
-    yield server
-    server.stop()
 
 
 @pytest.fixture(scope="session")
-def s3_server():
-    """Start S3-compatible object store."""
-    import tempfile
-
-    import objectstore
-    loop = asyncio.new_event_loop()
-    store = loop.run_until_complete(objectstore.configure(
-        "minio",
-        data_dir=tempfile.mkdtemp(prefix="test_media_s3_"),
-        api_port=9012,
-        console_port=9013,
-    ))
-    yield store
-    # atexit handles cleanup
-
-
-@pytest.fixture(scope="session")
-def store_conn(pg_server):
+def store_conn(_provision_media_user):
     """Connect to the object store as media_user."""
     from store.connection import connect
-    info = pg_server.conn_info()
+    info = _provision_media_user.conn_info()
     conn = connect(user="media_user", host=info["host"], port=info["port"],
                     dbname=info["dbname"], password="media_pw")
     yield conn
@@ -55,21 +32,21 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="session")
-def search_schema(pg_server, store_conn):
+def search_schema(_provision_media_user, store_conn):
     """Bootstrap the document_search table."""
     from media.models import bootstrap_search_schema
-    admin_conn = pg_server.admin_conn()
+    admin_conn = _provision_media_user.admin_conn()
     bootstrap_search_schema(admin_conn)
     admin_conn.close()
     return True
 
 
 @pytest.fixture(scope="session")
-def media_store(s3_server, store_conn, search_schema):
+def media_store(media_server, store_conn, search_schema):
     """Create a MediaStore connected to test object store."""
     from media import MediaStore
     ms = MediaStore(
-        s3_endpoint="localhost:9012",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-media",
@@ -303,5 +280,5 @@ and *volatility surface* construction.
 
         # But S3 object is still there (retained for audit)
         from objectstore import S3Client
-        s3 = S3Client(endpoint="localhost:9012", bucket="test-media")
+        s3 = S3Client(endpoint="localhost:9102", bucket="test-media")
         assert s3.exists(doc.s3_key)

@@ -29,14 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="module")
-def stack():
-    """Start the lakehouse stack (PG + Lakekeeper + S3 object store)."""
-    from lakehouse.admin import LakehouseServer
-    tmp_dir = tempfile.mkdtemp(prefix="tst_dc_", dir="/tmp")
-    srv = LakehouseServer(data_dir=tmp_dir)
-    asyncio.run(srv.start())
-    yield srv
-    asyncio.run(srv.stop())
+def stack(lakehouse_server):
+    """Delegate to session-scoped lakehouse_server from conftest.py."""
+    return lakehouse_server
 
 
 @pytest.fixture(scope="module")

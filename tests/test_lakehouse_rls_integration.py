@@ -50,34 +50,10 @@ SALES_ACL = [
 
 
 @pytest.fixture(scope="module")
-def lakehouse_stack():
-    """Start the full lakehouse stack with RLS configured."""
-    import shutil
-    import tempfile
-
-    from lakehouse.admin import LakehouseServer, RLSPolicy
-
-    data_dir = tempfile.mkdtemp(prefix="lh_rls_", dir="/tmp")
-
-    server = LakehouseServer(
-        data_dir=data_dir,
-        rls_policies=[
-            RLSPolicy(
-                table_name="sales_data",
-                acl_table="sales_acl",
-                join_column="row_id",
-                user_column="user_token",
-            ),
-        ],
-        rls_users={"alice-token": "alice", "bob-token": "bob"},
-    )
-    asyncio.run(server.start())
-    server.register_alias("rls-test")
-
-    yield server
-
-    asyncio.run(server.stop())
-    shutil.rmtree(data_dir, ignore_errors=True)
+def lakehouse_stack(lakehouse_server):
+    """Delegate to session-scoped lakehouse_server (already has RLS config)."""
+    lakehouse_server.register_alias("rls-test")
+    return lakehouse_server
 
 
 @pytest.fixture(scope="module")
@@ -86,7 +62,7 @@ def ingested_data(lakehouse_stack):
     from lakehouse import Lakehouse
 
     lh = Lakehouse("rls-test")
-    lh.ingest("trades", TRADES)
+    lh.ingest("rls_trades", TRADES)
     lh.ingest("sales_data", SALES_DATA)
     lh.ingest("sales_acl", SALES_ACL)
     lh.close()
@@ -104,7 +80,7 @@ class TestRLSIntegration:
         from lakehouse import Lakehouse
 
         lh = Lakehouse("rls-test", token="alice-token")
-        rows = lh.query("SELECT * FROM lakehouse.default.trades")
+        rows = lh.query("SELECT * FROM lakehouse.default.rls_trades")
         lh.close()
 
         assert len(rows) == 3
@@ -164,6 +140,6 @@ class TestRLSIntegration:
         from lakehouse import Lakehouse
 
         lh = Lakehouse("rls-test")
-        rows = lh.query("SELECT * FROM lakehouse.default.trades")
+        rows = lh.query("SELECT * FROM lakehouse.default.rls_trades")
         assert len(rows) == 3
         lh.close()

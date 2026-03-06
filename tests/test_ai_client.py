@@ -79,46 +79,26 @@ class TestExtraction:
 
 
 @pytest.fixture(scope="module")
-def pg_server():
-    import tempfile
-
+def _ai_server(store_server):
+    """Delegate to session-scoped store_server, add AI-specific bootstrap."""
     from media.models import bootstrap_chunks_schema, bootstrap_search_schema
-    from store.admin import StoreServer
-    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_ai_client_"))
-    server.start()
-    server.provision_user("ai_user", "ai_pw")
+    store_server.provision_user("ai_user", "ai_pw")
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_search_schema(conn, embedding_dim=768)
     conn.close()
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_chunks_schema(conn, embedding_dim=768)
     conn.close()
 
-    yield server
-    server.stop()
+    return store_server
 
 
 @pytest.fixture(scope="module")
-def s3_server():
-    import tempfile
-
-    import objectstore
-    loop = asyncio.new_event_loop()
-    store = loop.run_until_complete(objectstore.configure(
-        "minio",
-        data_dir=tempfile.mkdtemp(prefix="test_ai_client_s3_"),
-        api_port=9052, console_port=9053,
-    ))
-    yield store
-    # atexit handles cleanup
-
-
-@pytest.fixture(scope="module")
-def store_conn(pg_server):
+def store_conn(_ai_server):
     from store.connection import connect
-    info = pg_server.conn_info()
+    info = _ai_server.conn_info()
     conn = connect(user="ai_user", host=info["host"], port=info["port"],
                    dbname=info["dbname"], password="ai_pw")
     yield conn
@@ -126,11 +106,11 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store(ai_client, s3_server, store_conn):
+def media_store(ai_client, media_server, store_conn):
     from media import MediaStore
 
     ms = MediaStore(
-        s3_endpoint="localhost:9052",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-ai-client",

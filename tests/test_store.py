@@ -104,13 +104,9 @@ Order._state_machine = OrderLifecycle
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def server():
-    """Start an embedded PostgreSQL server for testing."""
-    tmp_dir = tempfile.mkdtemp(prefix="test_store_")
-    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
-    srv.start()
-    yield srv
-    srv.stop()
+def server(store_server):
+    """Delegate to session-scoped store_server from conftest.py."""
+    return store_server
 
 
 @pytest.fixture(scope="module")

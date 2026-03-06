@@ -12,7 +12,6 @@ import time
 from dataclasses import dataclass
 
 import pytest
-from store.admin import StoreServer
 from store.base import Storable
 from store.connection import UserConnection
 from store.state_machine import StateMachine, Transition
@@ -32,18 +31,10 @@ _client: UserConnection | None = None
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def server():
-    tmp_dir = tempfile.mkdtemp(prefix="test_workflow_")
-    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
-    srv.start()
-    yield srv
-    srv.stop()
-
-
-@pytest.fixture(scope="module")
-def engine(server):
+def engine(workflow_server):
+    """Create a WorkflowEngine using the session-scoped workflow_server's PG."""
     global _engine
-    eng = create_engine(server.pg_url(), name="test-workflow")
+    eng = create_engine(workflow_server.pg_url(), name="test-workflow")
     eng.launch()
     _engine = eng
     yield eng
@@ -52,13 +43,13 @@ def engine(server):
 
 
 @pytest.fixture(scope="module")
-def conn_info(server):
-    return server.conn_info()
+def conn_info(store_server):
+    return store_server.conn_info()
 
 
 @pytest.fixture(scope="module")
-def _provision_users(server):
-    server.provision_user("wf_alice", "pass_alice")
+def _provision_users(store_server):
+    store_server.provision_user("wf_alice", "pass_alice")
 
 
 @pytest.fixture(scope="module")

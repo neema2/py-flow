@@ -19,46 +19,26 @@ requires_gemini = pytest.mark.skipif(not GEMINI_API_KEY, reason="GEMINI_API_KEY 
 
 
 @pytest.fixture(scope="module")
-def pg_server():
-    import tempfile
-
+def _rag_server(store_server):
+    """Delegate to session-scoped store_server, add RAG-specific bootstrap."""
     from media.models import bootstrap_chunks_schema, bootstrap_search_schema
-    from store.admin import StoreServer
-    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_rag_"))
-    server.start()
-    server.provision_user("rag_user", "rag_pw")
+    store_server.provision_user("rag_user", "rag_pw")
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_search_schema(conn, embedding_dim=768)
     conn.close()
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_chunks_schema(conn, embedding_dim=768)
     conn.close()
 
-    yield server
-    server.stop()
+    return store_server
 
 
 @pytest.fixture(scope="module")
-def s3_server():
-    import tempfile
-
-    import objectstore
-    loop = asyncio.new_event_loop()
-    store = loop.run_until_complete(objectstore.configure(
-        "minio",
-        data_dir=tempfile.mkdtemp(prefix="test_rag_s3_"),
-        api_port=9042, console_port=9043,
-    ))
-    yield store
-    # atexit handles cleanup
-
-
-@pytest.fixture(scope="module")
-def store_conn(pg_server):
+def store_conn(_rag_server):
     from store.connection import connect
-    info = pg_server.conn_info()
+    info = _rag_server.conn_info()
     conn = connect(user="rag_user", host=info["host"], port=info["port"],
                    dbname=info["dbname"], password="rag_pw")
     yield conn
@@ -66,7 +46,7 @@ def store_conn(pg_server):
 
 
 @pytest.fixture(scope="module")
-def media_store(s3_server, store_conn):
+def media_store(media_server, store_conn):
     if not GEMINI_API_KEY:
         pytest.skip("GEMINI_API_KEY not set")
 
@@ -75,7 +55,7 @@ def media_store(s3_server, store_conn):
 
     ai_client = AI(api_key=GEMINI_API_KEY, embedding_dim=768)
     ms = MediaStore(
-        s3_endpoint="localhost:9042",
+        s3_endpoint="localhost:9102",
         s3_access_key="minioadmin",
         s3_secret_key="minioadmin",
         s3_bucket="test-rag",

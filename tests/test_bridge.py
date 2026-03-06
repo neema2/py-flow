@@ -65,12 +65,9 @@ class RichItem(Storable):
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def store_server():
-    tmp_dir = tempfile.mkdtemp(prefix="test_bridge_")
-    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
-    srv.start()
-    yield srv
-    srv.stop()
+def store_server(store_server):
+    """Delegate to session-scoped store_server from conftest.py."""
+    return store_server
 
 
 @pytest.fixture(scope="module")

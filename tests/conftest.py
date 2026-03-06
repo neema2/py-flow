@@ -1,9 +1,18 @@
 """
 Session-scoped test infrastructure — started once, shared across all test files.
 
-This is the equivalent of a GitHub Actions ``services:`` block.
-Heavy servers (DH JVM, MarketDataServer) start once for the entire session.
-Each test file publishes its own tables via the public client API.
+Mirrors ``demo_platform_agents.py``: each server is self-contained with its
+own embedded PG / MinIO / QuestDB on non-conflicting ports.  No shared backends.
+
+Start order::
+
+    1. StreamingServer   — JVM must start before test collection
+    2. store_server      — StoreServer (embedded PG, auto-port via pgserver)
+    3. media_server      — MediaServer (MinIO S3 on 9102/9103)
+    4. tsdb_server       — TsdbServer  (QuestDB on 9200/9209/8922)
+    5. market_data_server — MarketDataServer (FastAPI on 8765)
+    6. lakehouse_server  — LakehouseServer (own PG + Lakekeeper + MinIO)
+    7. scheduler_server  — SchedulerServer (own PG + WorkflowEngine)
 
 Requires a ``.env`` file at the project root with::
 
@@ -11,12 +20,12 @@ Requires a ``.env`` file at the project root with::
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
 
 # ── Load .env ────────────────────────────────────────────────────────────────
-# Simple loader — no dependency on python-dotenv.
 _env_file = Path(__file__).resolve().parent.parent / ".env"
 if _env_file.exists():
     for line in _env_file.read_text().splitlines():
@@ -35,44 +44,129 @@ if not os.environ.get("GEMINI_API_KEY"):
         "  echo 'GEMINI_API_KEY=your-key-here' > .env"
     )
 
-# ── Streaming (Deephaven JVM) ─────────────────────────────────────────────
-# The JVM MUST start before any test file that imports deephaven is collected.
-# Module-level code in conftest.py runs before test collection.
-from streaming.admin import StreamingServer
 
-_streaming = StreamingServer(port=10000, max_heap="512m")
-_streaming.start()
+# ── 1. Streaming (Deephaven JVM) ─────────────────────────────────────────
+# The JVM MUST start before any test file that imports deephaven is collected.
+# But we skip it entirely when running tests that don't need it (e.g. unit tests).
+
+import sys
+from pathlib import Path as _Path
+
+def _any_test_needs_streaming() -> bool:
+    """Check if any test file on the command line actually needs Deephaven."""
+    args = sys.argv[1:]
+    # No specific files → running full suite → need streaming
+    if not args:
+        return True
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        p = _Path(arg)
+        # If pointing at the whole tests/ directory, assume full suite
+        if p.is_dir():
+            return True
+        if p.is_file() and p.suffix == ".py":
+            src = p.read_text()
+            if "deephaven" in src or "streaming" in src:
+                return True
+    return False
+
+_streaming = None
+if _any_test_needs_streaming():
+    from streaming.admin import StreamingServer
+    _streaming = StreamingServer(port=10000, max_heap="512m")
+    _streaming.start()
 
 
 @pytest.fixture(scope="session")
 def streaming_server():
     """Expose the already-running StreamingServer as a fixture."""
+    if _streaming is None:
+        pytest.skip("StreamingServer not started (no tests need it)")
     return _streaming
 
 
-
-# ── Market Data Server (with QuestDB) ────────────────────────────────────
+# ── 2. StoreServer (embedded PostgreSQL) ─────────────────────────────────
 
 @pytest.fixture(scope="session")
-def market_data_server(tmp_path_factory):
-    """Start MarketDataServer with its own QuestDB on test-specific ports."""
+def store_server(tmp_path_factory):
+    """Self-contained embedded PostgreSQL via pgserver.
+
+    Uses Unix domain sockets — auto-assigned, no TCP port collisions.
+    Each test file provisions its own users for isolation.
+    """
+    from store.admin import StoreServer
+
+    tmp_dir = str(tmp_path_factory.mktemp("test_store"))
+    srv = StoreServer(data_dir=tmp_dir, admin_password="test_admin_pw")
+    srv.start()
+    srv.register_alias("test")
+    yield srv
+    srv.stop()
+
+
+# ── 3. MediaServer (MinIO S3) ───────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def media_server():
+    """Self-contained MinIO for document/media storage.
+
+    Each test file uses a different bucket for isolation.
+    """
+    import asyncio
+
+    from media.admin import MediaServer
+
+    srv = MediaServer(
+        data_dir=tempfile.mkdtemp(prefix="test_media_"),
+        api_port=9102,
+        console_port=9103,
+        bucket="test-media",
+    )
+    asyncio.run(srv.start())
+    srv.register_alias("test")
+    yield srv
+    asyncio.run(srv.stop())
+
+
+# ── 4. TsdbServer (QuestDB) ─────────────────────────────────────────────
+
+@pytest.fixture(scope="session")
+def tsdb_server():
+    """Self-contained QuestDB for timeseries storage."""
+    import asyncio
+
+    from timeseries.admin import TsdbServer
+
+    srv = TsdbServer(
+        data_dir=tempfile.mkdtemp(prefix="test_tsdb_"),
+        http_port=9200,
+        ilp_port=9209,
+        pg_port=8922,
+    )
+    asyncio.run(srv.start())
+    srv.register_alias("test")
+    yield srv
+    asyncio.run(srv.stop())
+
+
+# ── 5. MarketDataServer (FastAPI + SimulatorFeed) ────────────────────────
+
+@pytest.fixture(scope="session")
+def market_data_server(tsdb_server):
+    """MarketDataServer on port 8765 — depends on tsdb_server for tick storage."""
     import asyncio
     import time
 
     import httpx
     from marketdata.admin import MarketDataServer
 
-    tmp_dir = str(tmp_path_factory.mktemp("test_md_questdb"))
-    os.environ["QUESTDB_DATA_DIR"] = tmp_dir
-    os.environ["QUESTDB_HTTP_PORT"] = "19200"
-    os.environ["QUESTDB_ILP_PORT"] = "19209"
-    os.environ["QUESTDB_PG_PORT"] = "18922"
+    srv = MarketDataServer(port=8765, host="127.0.0.1")
+    asyncio.run(srv.start())
+    srv.register_alias("test")
 
-    server = MarketDataServer(port=18080, host="127.0.0.1")
-    asyncio.run(server.start())
-
-    # Wait for QuestDB to accumulate tick data from the simulator
-    url = server.url
+    # Wait for simulator to produce tick data
+    url = srv.url
     ready = False
     for _attempt in range(45):
         time.sleep(1)
@@ -87,13 +181,80 @@ def market_data_server(tmp_path_factory):
             continue
 
     if not ready:
-        asyncio.run(server.stop())
-        for key in ("QUESTDB_DATA_DIR", "QUESTDB_HTTP_PORT", "QUESTDB_ILP_PORT", "QUESTDB_PG_PORT"):
-            os.environ.pop(key, None)
+        asyncio.run(srv.stop())
         pytest.fail("Market data server did not produce tick data within 45s")
 
-    yield server
+    yield srv
+    asyncio.run(srv.stop())
 
-    asyncio.run(server.stop())
-    for key in ("QUESTDB_DATA_DIR", "QUESTDB_HTTP_PORT", "QUESTDB_ILP_PORT", "QUESTDB_PG_PORT"):
-        os.environ.pop(key, None)
+
+# ── 6. Lakehouse (Lakekeeper + Iceberg + own MinIO + own PG) ────────────
+
+@pytest.fixture(scope="session")
+def lakehouse_server():
+    """Self-contained Lakehouse stack on non-default ports.
+
+    Has its own embedded PG (port 5490) + Lakekeeper + MinIO.
+    Uses /tmp to keep Unix socket path < 103 bytes (macOS limit).
+    Includes RLS policies for ``sales_data`` table (test_lakehouse_rls_integration).
+    """
+    import asyncio
+
+    from lakehouse.admin import LakehouseServer, RLSPolicy
+
+    tmp_dir = tempfile.mkdtemp(prefix="tst_lh_", dir="/tmp")
+    srv = LakehouseServer(
+        data_dir=tmp_dir,
+        pg_port=5490,
+        lakekeeper_port=8183,
+        s3_api_port=9004,
+        s3_console_port=9005,
+        rls_policies=[
+            RLSPolicy(
+                table_name="sales_data",
+                acl_table="sales_acl",
+                join_column="row_id",
+                user_column="user_token",
+            ),
+        ],
+        rls_users={"alice-token": "alice", "bob-token": "bob"},
+    )
+    asyncio.run(srv.start())
+    srv.register_alias("test")
+    yield srv
+    asyncio.run(srv.stop())
+
+
+# ── 7. Workflow (own embedded PG + DBOS engine) ─────────────────────────
+
+@pytest.fixture(scope="session")
+def workflow_server(tmp_path_factory):
+    """Self-contained WorkflowServer — own embedded PG for durable workflows.
+
+    pgserver auto-assigns Unix socket, so no port collision.
+    """
+    from workflow.admin import WorkflowServer
+
+    tmp_dir = str(tmp_path_factory.mktemp("test_workflow"))
+    srv = WorkflowServer(data_dir=tmp_dir)
+    srv.start()
+    srv.register_alias("test")
+    yield srv
+    srv.stop()
+
+
+# ── 8. Scheduler (own embedded PG + WorkflowEngine) ─────────────────────
+
+@pytest.fixture(scope="session")
+def scheduler_server(tmp_path_factory):
+    """Self-contained SchedulerServer — own embedded PG + workflow engine.
+
+    pgserver auto-assigns Unix socket, so no port collision with store_server.
+    """
+    from scheduler.admin import SchedulerServer
+
+    tmp_dir = str(tmp_path_factory.mktemp("test_scheduler"))
+    srv = SchedulerServer(data_dir=tmp_dir)
+    srv.start(poll_interval=0)
+    yield srv
+    srv.stop()

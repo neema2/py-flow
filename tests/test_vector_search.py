@@ -17,29 +17,25 @@ from store.admin import StoreServer
 
 
 @pytest.fixture(scope="module")
-def pg_server():
-    """Start embedded PG, provision user, bootstrap search schema with pgvector."""
-    import tempfile
-    server = StoreServer(data_dir=tempfile.mkdtemp(prefix="test_vector_search_"))
-    server.start()
-    server.provision_user("vec_user", "vec_pw")
+def _vec_server(store_server):
+    """Delegate to session-scoped store_server, add vector search bootstrap."""
+    store_server.provision_user("vec_user", "vec_pw")
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_search_schema(conn, embedding_dim=768)
     conn.close()
 
-    conn = server.admin_conn()
+    conn = store_server.admin_conn()
     bootstrap_chunks_schema(conn, embedding_dim=768)
     conn.close()
 
-    yield server
-    server.stop()
+    return store_server
 
 
 @pytest.fixture()
-def db(pg_server):
+def db(_vec_server):
     """Fresh admin connection per test — avoids stale transaction locks."""
-    conn = pg_server.admin_conn()
+    conn = _vec_server.admin_conn()
     yield conn
     conn.close()
 
@@ -250,9 +246,9 @@ class TestVectorOperations:
         assert row[2] > 0  # text_rank > 0 (text matched)
         assert row[3] < 0.01  # vector_distance ≈ 0 (exact match)
 
-    def test_configurable_embedding_dim(self, pg_server):
+    def test_configurable_embedding_dim(self, _vec_server):
         """bootstrap_search_schema with same dim is idempotent."""
-        conn = pg_server.admin_conn()
+        conn = _vec_server.admin_conn()
         bootstrap_search_schema(conn, embedding_dim=768)
         conn.close()
 

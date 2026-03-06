@@ -7,7 +7,7 @@ then run datacube queries that aggregate down to tiny result sets.
 Demonstrates the zero-Python-transit path: S3 Parquet → DuckDB Iceberg → result.
 
 Usage:
-    python3 demos/demo_datacube.py
+    python3 demo_datacube.py
 """
 
 import asyncio
