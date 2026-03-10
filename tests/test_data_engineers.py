@@ -429,7 +429,14 @@ class TestFeedAgentE2E:
 class TestTimeseriesAgentE2E:
     """Timeseries agent tools against real MarketDataServer (embeds QuestDB)."""
 
+    @staticmethod
+    def _ensure_alias(market_data_server):
+        """Register the market data alias for agent_test (idempotent)."""
+        from marketdata._registry import register_alias as _reg_md
+        _reg_md("agent_test", url=market_data_server.url, port=market_data_server.port)
+
     def test_list_tsdb_series(self, market_data_server):
+        self._ensure_alias(market_data_server)
         ctx = _PlatformContext(alias="agent_test")
         tools = create_timeseries_tools(ctx)
         result = json.loads(_get_tool(tools, "list_tsdb_series")())
@@ -437,6 +444,7 @@ class TestTimeseriesAgentE2E:
         assert "symbols" in result
 
     def test_get_bars(self, market_data_server):
+        self._ensure_alias(market_data_server)
         ctx = _PlatformContext(alias="agent_test")
         tools = create_timeseries_tools(ctx)
         result = json.loads(_get_tool(tools, "get_bars")(msg_type="equity", symbol="AAPL", interval="1m"))
@@ -444,6 +452,7 @@ class TestTimeseriesAgentE2E:
         assert result["bar_count"] > 0
 
     def test_get_tick_history(self, market_data_server):
+        self._ensure_alias(market_data_server)
         ctx = _PlatformContext(alias="agent_test")
         tools = create_timeseries_tools(ctx)
         result = json.loads(_get_tool(tools, "get_tick_history")(msg_type="equity", symbol="AAPL", limit=50))
@@ -451,18 +460,29 @@ class TestTimeseriesAgentE2E:
         assert result["tick_count"] > 0
 
     def test_compute_realized_vol(self, market_data_server):
+        import time
+        self._ensure_alias(market_data_server)
         ctx = _PlatformContext(alias="agent_test")
         tools = create_timeseries_tools(ctx)
-        result = json.loads(_get_tool(tools, "compute_realized_vol")(symbol="AAPL", msg_type="equity", window=5))
-        # Might fail if not enough bars yet — check for either success or known error
-        if "error" not in result:
-            assert "annualized_vol" in result
-            assert result["annualized_vol"] >= 0
-        else:
-            # Acceptable errors: not enough data, division issues in short windows
-            assert "error" in result
+        vol_fn = _get_tool(tools, "compute_realized_vol")
+
+        # Retry for up to 10s — simulator needs time to generate enough bars
+        deadline = time.time() + 10
+        result = None
+        while time.time() < deadline:
+            result = json.loads(vol_fn(symbol="AAPL", msg_type="equity", window=5))
+            if "error" not in result:
+                break
+            time.sleep(1)
+
+        assert result is not None and "error" not in result, (
+            f"compute_realized_vol did not succeed after 10s: {result}"
+        )
+        assert "annualized_vol" in result
+        assert result["annualized_vol"] >= 0
 
     def test_compare_cross_exchange(self, market_data_server):
+        self._ensure_alias(market_data_server)
         ctx = _PlatformContext(alias="agent_test")
         tools = create_timeseries_tools(ctx)
         result = json.loads(_get_tool(tools, "compare_cross_exchange")(symbol="AAPL", msg_type="equity"))
