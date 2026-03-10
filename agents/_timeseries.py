@@ -209,7 +209,7 @@ def create_timeseries_tools(ctx: _PlatformContext) -> list:
 
     @tool
     def compute_realized_vol(symbol: str, msg_type: str = "equity",
-                             window: int = 20) -> str:
+                             window: int = 20, interval: str = "1m") -> str:
         """Compute realized volatility from tick data.
 
         Uses log-returns over the tick history, annualized assuming 252 trading days.
@@ -218,12 +218,13 @@ def create_timeseries_tools(ctx: _PlatformContext) -> list:
             symbol: Symbol identifier.
             msg_type: Asset type — "equity" or "fx".
             window: Number of most recent bars to use (default 20).
+            interval: Bar interval — "1s", "1m", "5m", "15m", "1h", "1d" (default "1m").
         """
         try:
             import httpx
             resp = httpx.get(
                 _md_url(f"/md/bars/{msg_type}/{symbol}"),
-                params={"interval": "1m"},
+                params={"interval": interval},
                 timeout=10.0,
             )
             resp.raise_for_status()

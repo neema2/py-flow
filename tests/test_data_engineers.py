@@ -470,7 +470,7 @@ class TestTimeseriesAgentE2E:
         deadline = time.time() + 10
         result = None
         while time.time() < deadline:
-            result = json.loads(vol_fn(symbol="AAPL", msg_type="equity", window=5))
+            result = json.loads(vol_fn(symbol="AAPL", msg_type="equity", window=5, interval="1s"))
             if "error" not in result:
                 break
             time.sleep(1)
