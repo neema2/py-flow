@@ -21,7 +21,11 @@ from typing import Any
 
 
 def _dh_agg() -> Any:
-    from deephaven import agg as _agg
+    import platform
+    if platform.system() == "Linux" and platform.machine() in ("aarch64", "arm64"):
+        from pydeephaven import agg as _agg
+    else:
+        from deephaven import agg as _agg
     return _agg
 
 

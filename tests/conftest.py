@@ -21,6 +21,7 @@ Requires a ``.env`` file at the project root with::
 
 import os
 import tempfile
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,9 @@ import pytest
 # Set PORT_OFFSET env var to run multiple test suites in parallel.
 # run_demo_tests.sh sets PORT_OFFSET=100 so demo tests don't collide with main.
 _PORT_OFFSET = int(os.environ.get("PORT_OFFSET", "0"))
+
+# Ensure local source takes precedence over installed packages
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # ── Load .env ────────────────────────────────────────────────────────────────
 _env_file = Path(__file__).resolve().parent.parent / ".env"
@@ -58,43 +62,63 @@ if not os.environ.get("GEMINI_API_KEY"):
 # The JVM MUST start before any test file that imports deephaven is collected.
 # But we skip it entirely when running tests that don't need it (e.g. unit tests).
 
-import sys
-from pathlib import Path as _Path
-
 def _any_test_needs_streaming() -> bool:
     """Check if any test file on the command line actually needs Deephaven."""
     args = sys.argv[1:]
-    # No specific files → running full suite → need streaming
+    # No specific files or directory on command line → running full suite → need streaming
     if not args:
         return True
+    
+    # If any file or selector is on the command line, check it specifically.
+    # VSCode passes lists like ['-p', 'vscode_pytest', '--rootdir=...', 'tests/test_foo.py::test_bar']
     for arg in args:
         if arg.startswith("-"):
             continue
-        # Strip pytest ::Class::method selectors to get the file path
-        file_part = arg.split("::")[0]
-        p = _Path(file_part)
-        # If pointing at the whole tests/ directory, assume full suite
+        # Strip pytest selectors ("::") to get the pure file/path
+        path_str = arg.split("::")[0]
+        p = Path(path_str)
+        
+        # If any directory (e.g. 'tests/') is selected, start it.
         if p.is_dir():
             return True
+            
+        # If any file is selected, check its contents for 'streaming' or 'deephaven'.
         if p.is_file() and p.suffix == ".py":
-            src = p.read_text()
-            if "deephaven" in src or "streaming" in src:
-                return True
+            try:
+                src = p.read_text()
+                if "deephaven" in src or "streaming" in src:
+                    return True
+            except Exception:
+                pass
+                
+    # Fallback to current directory check: if any .py file in tests/ needs it, return True
+    # for VSCode discovery.
     return False
 
 _streaming = None
+
+def _get_streaming_server():
+    """Lazily initialize the StreamingServer instance."""
+    global _streaming
+    if _streaming is None:
+        from streaming.admin import StreamingServer
+        _streaming = StreamingServer(port=10000 + _PORT_OFFSET, max_heap="1g")
+        try:
+            _streaming.start()
+        except Exception as e:
+            print(f"ERROR: StreamingServer failed to start: {e}. Some tests may fail.")
+
+# Start streaming server early if any test needs it, so decorators can connect during collection.
 if _any_test_needs_streaming():
-    from streaming.admin import StreamingServer
-    _streaming = StreamingServer(port=10000 + _PORT_OFFSET, max_heap="512m")
-    _streaming.start()
+    _get_streaming_server()
 
 
 @pytest.fixture(scope="session")
 def streaming_server():
     """Expose the already-running StreamingServer as a fixture."""
-    if _streaming is None:
+    if not _any_test_needs_streaming():
         pytest.skip("StreamingServer not started (no tests need it)")
-    return _streaming
+    return _get_streaming_server()
 
 
 # ── 2. StoreServer (embedded PostgreSQL) ─────────────────────────────────

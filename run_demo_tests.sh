@@ -40,10 +40,18 @@ LOG_DIR=".test_runs"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_demo.txt"
 
+# ── Architecture detection for Pytest forking ─────────────────────────
+PYTEST_ARGS=""
+if [[ "$(uname -m)" == "aarch64" ]] || [[ "$(uname -m)" == "arm64" ]]; then
+    # Run tests in forked subprocesses to ensure pydeephaven gRPC sockets 
+    # are cleanly destroyed between tests and never leak stale connections.
+    PYTEST_ARGS="--forked"
+fi
+
 if [ $# -eq 0 ]; then
-    python3 -m pytest tests/test_demo_*.py -v --durations=0 2>&1 | tee "$LOGFILE"
+    python3 -m pytest tests/test_demo_*.py -v $PYTEST_ARGS --durations=0 2>&1 | tee "$LOGFILE"
 else
-    python3 -m pytest "$@" --durations=0 2>&1 | tee "$LOGFILE"
+    python3 -m pytest "$@" $PYTEST_ARGS --durations=0 2>&1 | tee "$LOGFILE"
 fi
 RC=${PIPESTATUS[0]}
 

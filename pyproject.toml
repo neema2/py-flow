@@ -29,9 +29,9 @@ classifiers = [
 dependencies = [
     "reaktiv>=0.19.0",
     "psycopg2-binary>=2.9.0",
-    "pgserver>=0.1.0",
+    "pgserver>=0.1.0; sys_platform != 'linux' or (platform_machine != 'aarch64' and platform_machine != 'arm64')",
+    "pixeltable-pgserver>=0.1.0; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
     "dbos>=2.13.0",
-    "croniter>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -90,10 +90,17 @@ agents = [
     "httpx>=0.27.0",
     "numpy",
 ]
+scheduler = [
+    "croniter>=2.0.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-forked>=1.6.0",
     "httpx>=0.27.0",
+]
+all = [
+    "deepflowdb[server,marketdata,timeseries,lakehouse,media,ai,datacube,client,scheduler,dev]",
 ]
 
 [project.urls]

@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 venv/
+.venv/
 .env
 .DS_Store
 *.egg-info/
@@ -16,3 +17,5 @@ models/agent_generated/
 store/columns/agent_generated/
 datacube/static/perspective-viewer-datagrid.js
 .demo_runs/
+*.whl
+pginstall/

@@ -7,35 +7,68 @@ Run with: pytest tests/test_multi_client.py -v
 
 import pytest
 from streaming import StreamingClient
+from streaming._utils import _is_remote
 
 
 def _publish_tables():
     """Publish prices_live + portfolio_summary to DH query scope."""
-    from deephaven import agg, new_table
-    from deephaven.column import double_col, long_col, string_col
-    from deephaven.execution_context import get_exec_ctx
+    if not _is_remote():
+        # EXACT ORIGINAL CODE for x86/macOS
+        from deephaven import agg, new_table
+        from deephaven.column import double_col, long_col, string_col
+        from deephaven.execution_context import get_exec_ctx
 
-    prices_live = new_table([
-        string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
-        double_col("Price", [228.0, 192.0, 415.0, 225.0, 355.0, 138.0, 580.0, 920.0]),
-        double_col("Bid", [227.9, 191.9, 414.9, 224.9, 354.9, 137.9, 579.9, 919.9]),
-        double_col("Ask", [228.1, 192.1, 415.1, 225.1, 355.1, 138.1, 580.1, 920.1]),
-        long_col("Volume", [1000000, 800000, 900000, 700000, 1200000, 1500000, 600000, 400000]),
-        double_col("Change", [1.5, -0.8, 2.1, -1.2, 3.5, -0.5, 1.8, -2.0]),
-        double_col("ChangePct", [0.66, -0.42, 0.51, -0.53, 0.99, -0.36, 0.31, -0.22]),
-    ])
+        prices_live = new_table([
+            string_col("Symbol", ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"]),
+            double_col("Price", [228.0, 192.0, 415.0, 225.0, 355.0, 138.0, 580.0, 920.0]),
+            double_col("Bid", [227.9, 191.9, 414.9, 224.9, 354.9, 137.9, 579.9, 919.9]),
+            double_col("Ask", [228.1, 192.1, 415.1, 225.1, 355.1, 138.1, 580.1, 920.1]),
+            long_col("Volume", [1000000, 800000, 900000, 700000, 1200000, 1500000, 600000, 400000]),
+            double_col("Change", [1.5, -0.8, 2.1, -1.2, 3.5, -0.5, 1.8, -2.0]),
+            double_col("ChangePct", [0.66, -0.42, 0.51, -0.53, 0.99, -0.36, 0.31, -0.22]),
+        ])
 
-    portfolio_summary = new_table([
-        string_col("Symbol", ["AAPL","GOOGL","MSFT","AMZN","TSLA","NVDA","META","NFLX"]),
-        double_col("Delta", [0.65, 0.55, 0.70, 0.50, 0.80, 0.60, 0.45, 0.35]),
-    ]).agg_by([
-        agg.sum_(["TotalDelta=Delta"]),
-        agg.count_("Count"),
-    ])
+        portfolio_summary = new_table([
+            string_col("Symbol", ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"]),
+            double_col("Delta", [0.65, 0.55, 0.70, 0.50, 0.80, 0.60, 0.45, 0.35]),
+        ]).agg_by([
+            agg.sum_(["TotalDelta=Delta"]),
+            agg.count_("Count"),
+        ])
 
-    scope = get_exec_ctx().j_exec_ctx.getQueryScope()
-    scope.putParam("prices_live", prices_live.j_table)
-    scope.putParam("portfolio_summary", portfolio_summary.j_table)
+        scope = get_exec_ctx().j_exec_ctx.getQueryScope()
+        scope.putParam("prices_live", prices_live.j_table)
+        scope.putParam("portfolio_summary", portfolio_summary.j_table)
+    else:
+        # ARM/WSL path: Run the same setup script on the remote server
+        with StreamingClient() as client:
+            client.run_script("""
+from deephaven import agg, new_table
+from deephaven.column import double_col, long_col, string_col
+from deephaven.execution_context import get_exec_ctx
+
+prices_live = new_table([
+    string_col("Symbol", ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"]),
+    double_col("Price", [228.0, 192.0, 415.0, 225.0, 355.0, 138.0, 580.0, 920.0]),
+    double_col("Bid", [227.9, 191.9, 414.9, 224.9, 354.9, 137.9, 579.9, 919.9]),
+    double_col("Ask", [228.1, 192.1, 415.1, 225.1, 355.1, 138.1, 580.1, 920.1]),
+    long_col("Volume", [1000000, 800000, 900000, 700000, 1200000, 1500000, 600000, 400000]),
+    double_col("Change", [1.5, -0.8, 2.1, -1.2, 3.5, -0.5, 1.8, -2.0]),
+    double_col("ChangePct", [0.66, -0.42, 0.51, -0.53, 0.99, -0.36, 0.31, -0.22]),
+])
+
+portfolio_summary = new_table([
+    string_col("Symbol", ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA", "NVDA", "META", "NFLX"]),
+    double_col("Delta", [0.65, 0.55, 0.70, 0.50, 0.80, 0.60, 0.45, 0.35]),
+]).agg_by([
+    agg.sum_(["TotalDelta=Delta"]),
+    agg.count_("Count"),
+])
+
+scope = get_exec_ctx().j_exec_ctx.getQueryScope()
+scope.putParam("prices_live", prices_live.j_table)
+scope.putParam("portfolio_summary", portfolio_summary.j_table)
+""")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -52,7 +85,7 @@ def _connect():
 # ── Cross-session table visibility ───────────────────────────────────────────
 
 class TestCrossSessionVisibility:
-    def test_client_a_publishes_client_b_sees(self):
+    def test_client_a_publishes_client_b_sees(self, streaming_server):
         a = _connect()
         b = _connect()
         try:
@@ -64,7 +97,7 @@ class TestCrossSessionVisibility:
             a.close()
             b.close()
 
-    def test_client_b_reads_data_from_client_a_table(self):
+    def test_client_b_reads_data_from_client_a_table(self, streaming_server):
         a = _connect()
         b = _connect()
         try:
@@ -76,7 +109,7 @@ class TestCrossSessionVisibility:
             a.close()
             b.close()
 
-    def test_table_persists_after_creator_disconnects(self):
+    def test_table_persists_after_creator_disconnects(self, streaming_server):
         a = _connect()
         a.run_script('cross_test_persist = prices_live.where(["Symbol = `NVDA`"])')
         a.close()
@@ -94,18 +127,20 @@ class TestCrossSessionVisibility:
 # ── Multiple concurrent sessions ─────────────────────────────────────────────
 
 class TestConcurrentSessions:
-    def test_three_clients_connect_simultaneously(self):
+    def test_three_clients_connect_simultaneously(self, streaming_server):
         clients = [_connect() for _ in range(3)]
         try:
             for c in clients:
-                assert c._session.is_alive
+                # session.is_alive depends on client type
+                if hasattr(c._session, 'is_alive'):
+                    assert c._session.is_alive
                 tables = c.list_tables()
                 assert "prices_live" in tables
         finally:
             for c in clients:
                 c.close()
 
-    def test_all_clients_see_same_symbols(self):
+    def test_all_clients_see_same_symbols(self, streaming_server):
         clients = [_connect() for _ in range(3)]
         try:
             symbol_sets = []
@@ -119,7 +154,7 @@ class TestConcurrentSessions:
             for c in clients:
                 c.close()
 
-    def test_each_client_publishes_independently(self):
+    def test_each_client_publishes_independently(self, streaming_server):
         a = _connect()
         b = _connect()
         c = _connect()
@@ -148,7 +183,7 @@ class TestConcurrentSessions:
 # ── Script isolation ─────────────────────────────────────────────────────────
 
 class TestScriptIsolation:
-    def test_bad_script_does_not_break_other_sessions(self):
+    def test_bad_script_does_not_break_other_sessions(self, streaming_server):
         a = _connect()
         b = _connect()
         try:
@@ -165,7 +200,7 @@ class TestScriptIsolation:
             a.close()
             b.close()
 
-    def test_overwrite_table_visible_to_others(self):
+    def test_overwrite_table_visible_to_others(self, streaming_server):
         a = _connect()
         b = _connect()
         try:
@@ -185,7 +220,7 @@ class TestScriptIsolation:
 # ── Data consistency ─────────────────────────────────────────────────────────
 
 class TestDataConsistency:
-    def test_portfolio_summary_consistent_across_clients(self):
+    def test_portfolio_summary_consistent_across_clients(self, streaming_server):
         """Two clients reading portfolio_summary should get same structure."""
         a = _connect()
         b = _connect()
@@ -198,7 +233,7 @@ class TestDataConsistency:
             a.close()
             b.close()
 
-    def test_derived_table_data_visible_to_other_client(self):
+    def test_derived_table_data_visible_to_other_client(self, streaming_server):
         """A derived table created by one client has correct data for another."""
         a = _connect()
         b = _connect()

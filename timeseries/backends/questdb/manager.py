@@ -36,6 +36,10 @@ def _detect_archive_name() -> str:
             return f"questdb-{QUESTDB_VERSION}-no-jre-bin.tar.gz"
         return f"questdb-{QUESTDB_VERSION}-no-jre-bin.tar.gz"
     elif system == "linux":
+        if machine in ("aarch64", "arm64"):
+            # Use the architecture-independent 'no-jre' binary on ARM Linux
+            # to avoid bundled x86_64 JRE crashes.
+            return f"questdb-{QUESTDB_VERSION}-no-jre-bin.tar.gz"
         return f"questdb-{QUESTDB_VERSION}-rt-linux-amd64.tar.gz"
     elif system == "windows":
         return f"questdb-{QUESTDB_VERSION}-no-jre-bin.tar.gz"

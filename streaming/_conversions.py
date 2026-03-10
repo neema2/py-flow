@@ -16,12 +16,20 @@ def to_streaming_value(value: Any) -> Any:
 
     Currently the only conversion needed is datetime → java.time.Instant
     (required by the DynamicTableWriter).  All other types pass through.
+
+    On ARM64 / remote mode, datetimes pass through unchanged — pydeephaven
+    handles the conversion natively.
     """
     if value is None:
         return None
     if isinstance(value, datetime):
+        from streaming._utils import _is_remote
+        if _is_remote():
+            # Remote (Docker) mode: pydeephaven accepts Python datetimes directly
+            return value
         from deephaven.time import to_j_instant
         return to_j_instant(value)
     if isinstance(value, Decimal):
         return float(value)
     return value
+

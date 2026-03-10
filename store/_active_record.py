@@ -14,7 +14,12 @@ import dataclasses
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Self, TypeVar
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+from typing import Any, ClassVar, TypeVar
+
 
 from store.query_result import QueryResult
 

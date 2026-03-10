@@ -21,10 +21,9 @@ import os
 import urllib.parse
 from typing import Any
 
-import pgserver
 from db import Connection
 from db import connect as _db_connect
-from pgserver import PostgresServer
+from store.pg_compat import PostgresServer, get_server, PGSERVER_FILE, ensure_uuid_ossp_shim
 
 from workflow._registry import register_alias as _register_alias
 
@@ -49,47 +48,16 @@ class WorkflowServer:
     def start(self) -> WorkflowServer:
         """Start the embedded PostgreSQL server and bootstrap for workflow use."""
         os.makedirs(self.data_dir, exist_ok=True)
-        self._pg = pgserver.get_server(self.data_dir)
-        self._ensure_uuid_ossp_shim()
+        self._pg = get_server(self.data_dir)
+        ensure_uuid_ossp_shim(PGSERVER_FILE)
         self._detect_superuser()
         self._bootstrap()
         return self
 
     # ── Internal ─────────────────────────────────────────────────────
 
-    def _ensure_uuid_ossp_shim(self) -> None:
-        """Create a pure-SQL uuid-ossp shim if the extension files are missing.
-        DBOS migrations require uuid-ossp. pgserver on Linux doesn't bundle
-        the C-based extension, but PG 13+ has gen_random_uuid() built-in."""
-        ext_dir = os.path.join(
-            os.path.dirname(pgserver.__file__),
-            "pginstall", "share", "postgresql", "extension",
-        )
-        control = os.path.join(ext_dir, "uuid-ossp.control")
-        sql = os.path.join(ext_dir, "uuid-ossp--1.1.sql")
-        if os.path.exists(control) and os.path.exists(sql):
-            return
-        os.makedirs(ext_dir, exist_ok=True)
-        if not os.path.exists(control):
-            with open(control, "w") as f:
-                f.write(
-                    "# uuid-ossp shim — gen_random_uuid() is built-in since PG 13\n"
-                    "comment = 'generate universally unique identifiers (UUIDs)'\n"
-                    "default_version = '1.1'\n"
-                    "relocatable = true\n"
-                )
-        if not os.path.exists(sql):
-            with open(sql, "w") as f:
-                f.write(
-                    "-- uuid-ossp shim for pgserver (no C library available)\n"
-                    "-- gen_random_uuid() is built-in since PG 13\n"
-                    "-- Provide uuid_generate_v4 as an alias for compatibility\n"
-                    "CREATE OR REPLACE FUNCTION uuid_generate_v4() RETURNS uuid\n"
-                    "AS $$ SELECT gen_random_uuid() $$ LANGUAGE SQL;\n"
-                )
-
     def _require_pg(self) -> PostgresServer:
-        assert self._pg is not None, "WorkflowServer not started"
+        assert self._pg is not None, "PostgreSQL server not started. Call .start() first."
         return self._pg
 
     def _detect_superuser(self) -> None:
