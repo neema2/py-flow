@@ -13,7 +13,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from marketdata.models import CurveTick, FXTick, Tick, get_symbol_key
+from marketdata.models import CurveTick, FXTick, Tick, SwapTick, JacobianTick, get_symbol_key
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,9 @@ class TickBus:
         self._maxsize = maxsize
         self._subscriptions: dict[str, _Subscription] = {}
         self._lock = asyncio.Lock()
-        self.latest: dict[tuple[str, str], Tick | FXTick | CurveTick] = {}
+        self.latest: dict[tuple[str, str], Tick | FXTick | CurveTick | SwapTick | JacobianTick] = {}
 
-    async def publish(self, msg: Tick | FXTick | CurveTick) -> None:
+    async def publish(self, msg: Tick | FXTick | CurveTick | SwapTick | JacobianTick) -> None:
         """Publish a market data message to all matching subscribers.
 
         Updates the latest snapshot cache and dispatches to queues.
@@ -73,7 +73,7 @@ class TickBus:
                 logger.warning("Failed to enqueue msg for sub %s", sub.sub_id)
 
     def publish_sync(
-        self, msg: Tick | FXTick | CurveTick, loop: asyncio.AbstractEventLoop
+        self, msg: Tick | FXTick | CurveTick | SwapTick | JacobianTick, loop: asyncio.AbstractEventLoop
     ) -> None:
         """Thread-safe publish — call from non-async code (e.g. feed threads).
 
@@ -85,7 +85,7 @@ class TickBus:
         self,
         types: set[str] | None = None,
         symbols: set[str] | None = None,
-    ) -> tuple[str, AsyncIterator[Tick | FXTick | CurveTick]]:
+    ) -> tuple[str, AsyncIterator[Tick | FXTick | CurveTick | SwapTick | JacobianTick]]:
         """Subscribe to messages, optionally filtered by type and symbol.
 
         Args:
@@ -105,7 +105,7 @@ class TickBus:
         async with self._lock:
             self._subscriptions[sub_id] = sub
 
-        async def _iter() -> AsyncIterator[Tick | FXTick | CurveTick]:
+        async def _iter() -> AsyncIterator[Tick | FXTick | CurveTick | SwapTick | JacobianTick]:
             try:
                 while sub.active:
                     try:

@@ -18,12 +18,13 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse
 from timeseries import TSDBBackend
 from timeseries.admin import TSDBConsumer, create_backend
 
 from marketdata.bus import TickBus
 from marketdata.consumers.ws_publisher import WebSocketPublisher
-from marketdata.feeds.simulator import FX_PAIRS, SYMBOLS, SimulatorFeed
+from marketdata.feeds.simulator import FX_PAIRS, SWAP_INSTRUMENTS, SYMBOLS, SimulatorFeed
 from marketdata.models import (
     MarketDataMessage,
     Subscription,
@@ -92,7 +93,10 @@ app = FastAPI(
 )
 
 
-# ── REST Endpoints ────────────────────────────────────────────────────────────
+@app.get("/")
+async def root():
+    """Redirect to API documentation."""
+    return RedirectResponse(url="/docs")
 
 
 @app.get("/md/health")
@@ -119,6 +123,8 @@ async def get_symbols() -> dict:
     return {
         "equity": list(SYMBOLS),
         "fx": list(FX_PAIRS),
+        "swap": list(SWAP_INSTRUMENTS),
+        "jacobian": ["IR_USD_YC_JACOBIAN.*"],
     }
 
 
@@ -269,7 +275,7 @@ async def websocket_subscribe(ws: WebSocket) -> None:
         while True:
             data = await ws.receive_json()
             # If message has a 'type' field with a known asset type → publish
-            if "type" in data and data["type"] in ("equity", "fx", "curve"):
+            if "type" in data and data["type"] in ("equity", "fx", "curve", "swap", "jacobian"):
                 from pydantic import TypeAdapter
                 adapter: TypeAdapter[MarketDataMessage] = TypeAdapter(MarketDataMessage)
                 msg = adapter.validate_python(data)

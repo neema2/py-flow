@@ -21,7 +21,7 @@ class TestToSnakeCase:
         assert _to_snake_case("SwapPortfolio") == "swap_portfolio"
 
     def test_three_words(self):
-        assert _to_snake_case("InterestRateSwap") == "interest_rate_swap"
+        assert _to_snake_case("IRSwapFixedFloatApprox") == "ir_swap_fixed_float_approx"
 
     def test_consecutive_caps(self):
         assert _to_snake_case("FXSpot") == "fx_spot"

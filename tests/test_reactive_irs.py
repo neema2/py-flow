@@ -77,7 +77,7 @@ class YieldCurve(Storable):
 # ── Interest Rate Swap ───────────────────────────────────────────────────
 
 @dataclass
-class InterestRateSwap(Storable):
+class IRSwapFixedFloatApprox(Storable):
     """A plain vanilla interest rate swap."""
     symbol: str = ""
     notional: float = 0.0
@@ -355,7 +355,7 @@ class TestSwapPricing:
 
     def test_npv_positive_when_float_above_fixed(self):
         """Receiver swap: float > fixed → positive NPV."""
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-001", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.04, tenor_years=5.0,
         )
@@ -364,7 +364,7 @@ class TestSwapPricing:
 
     def test_npv_negative_when_float_below_fixed(self):
         """Receiver swap: float < fixed → negative NPV."""
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-002", notional=10_000_000,
             fixed_rate=0.05, float_rate=0.03, tenor_years=5.0,
         )
@@ -373,7 +373,7 @@ class TestSwapPricing:
 
     def test_npv_flat_when_rates_equal(self):
         """float_rate == fixed_rate → NPV ≈ 0."""
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-003", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=5.0,
         )
@@ -381,7 +381,7 @@ class TestSwapPricing:
         assert swap.pnl_status == "FLAT"
 
     def test_dv01_computation(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-004", notional=10_000_000, tenor_years=5.0,
             fixed_rate=0.03, float_rate=0.04,
         )
@@ -389,7 +389,7 @@ class TestSwapPricing:
         assert abs(swap.dv01 - expected) < 0.01
 
     def test_npv_reacts_to_float_rate_change(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-005", notional=10_000_000,
             fixed_rate=0.035, float_rate=0.035, tenor_years=5.0,
         )
@@ -400,7 +400,7 @@ class TestSwapPricing:
         assert swap.pnl_status == "PROFIT"
 
     def test_npv_reacts_to_notional_change(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-006", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.04, tenor_years=5.0,
         )
@@ -413,7 +413,7 @@ class TestSwapPricing:
         assert abs(npv_20m / npv_10m - 2.0) < 0.01
 
     def test_dv01_reacts_to_tenor_change(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-007", notional=10_000_000, tenor_years=5.0,
             fixed_rate=0.04, float_rate=0.04,
         )
@@ -425,7 +425,7 @@ class TestSwapPricing:
         assert abs(dv01_10y / dv01_5y - 2.0) < 0.01
 
     def test_fixed_leg_pv(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-008", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=5.0,
         )
@@ -434,7 +434,7 @@ class TestSwapPricing:
         assert abs(swap.fixed_leg_pv - expected) < 0.01
 
     def test_float_leg_pv(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-009", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.05, tenor_years=5.0,
         )
@@ -443,7 +443,7 @@ class TestSwapPricing:
         assert abs(swap.float_leg_pv - expected) < 0.01
 
     def test_batch_rate_update(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="IRS-010", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=5.0,
         )
@@ -462,15 +462,15 @@ class TestSwapPortfolio:
     """Cross-entity: portfolio aggregates react to child swap changes."""
 
     def _make_book(self):
-        s1 = InterestRateSwap(
+        s1 = IRSwapFixedFloatApprox(
             symbol="IRS-A", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.04, tenor_years=5.0,
         )
-        s2 = InterestRateSwap(
+        s2 = IRSwapFixedFloatApprox(
             symbol="IRS-B", notional=5_000_000,
             fixed_rate=0.05, float_rate=0.03, tenor_years=7.0,
         )
-        s3 = InterestRateSwap(
+        s3 = IRSwapFixedFloatApprox(
             symbol="IRS-C", notional=20_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=10.0,
         )
@@ -528,14 +528,14 @@ class TestSwapPortfolio:
         assert book.min_npv == 0.0
 
     def test_add_swap_to_portfolio(self):
-        s1 = InterestRateSwap(
+        s1 = IRSwapFixedFloatApprox(
             symbol="IRS-X", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.04, tenor_years=5.0,
         )
         book = SwapPortfolio(swaps=[s1])
         npv_1 = book.total_npv
 
-        s2 = InterestRateSwap(
+        s2 = IRSwapFixedFloatApprox(
             symbol="IRS-Y", notional=5_000_000,
             fixed_rate=0.04, float_rate=0.05, tenor_years=3.0,
         )
@@ -562,11 +562,11 @@ class TestEndToEndCascade:
         curve = YieldCurve(curve_points=[p1y, p5y, p10y])
 
         # Layer 2: Swaps referencing curve rates
-        swap_5y = InterestRateSwap(
+        swap_5y = IRSwapFixedFloatApprox(
             symbol="5Y-IRS", notional=10_000_000,
             fixed_rate=0.035, float_rate=p5y.rate, tenor_years=5.0,
         )
-        swap_10y = InterestRateSwap(
+        swap_10y = IRSwapFixedFloatApprox(
             symbol="10Y-IRS", notional=20_000_000,
             fixed_rate=0.04, float_rate=p10y.rate, tenor_years=10.0,
         )
@@ -606,15 +606,15 @@ class TestEndToEndCascade:
         p10y = YieldCurvePoint(tenor_years=10.0, rate=0.04)
         _curve = YieldCurve(curve_points=[p2y, p5y, p10y])
 
-        swap_2y = InterestRateSwap(
+        swap_2y = IRSwapFixedFloatApprox(
             symbol="2Y", notional=5_000_000,
             fixed_rate=0.025, float_rate=p2y.rate, tenor_years=2.0,
         )
-        swap_5y = InterestRateSwap(
+        swap_5y = IRSwapFixedFloatApprox(
             symbol="5Y", notional=10_000_000,
             fixed_rate=0.03, float_rate=p5y.rate, tenor_years=5.0,
         )
-        swap_10y = InterestRateSwap(
+        swap_10y = IRSwapFixedFloatApprox(
             symbol="10Y", notional=20_000_000,
             fixed_rate=0.035, float_rate=p10y.rate, tenor_years=10.0,
         )
@@ -645,7 +645,7 @@ class TestEndToEndCascade:
         fx = FXSpot(pair="USD/JPY", bid=149.50, ask=149.60, currency="JPY")
         pt = YieldCurvePoint(tenor_years=5.0, rate=0.01)  # JPY rate
 
-        swap_jpy = InterestRateSwap(
+        swap_jpy = IRSwapFixedFloatApprox(
             symbol="JPY-5Y", notional=1_000_000_000,  # 1B JPY
             fixed_rate=0.005, float_rate=pt.rate, tenor_years=5.0,
             currency="JPY",
@@ -673,12 +673,12 @@ class TestMultiCurrencySwaps:
     """Portfolio with swaps in different currencies react independently."""
 
     def test_usd_and_jpy_swaps_independent(self):
-        usd_swap = InterestRateSwap(
+        usd_swap = IRSwapFixedFloatApprox(
             symbol="USD-5Y", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=5.0,
             currency="USD",
         )
-        jpy_swap = InterestRateSwap(
+        jpy_swap = IRSwapFixedFloatApprox(
             symbol="JPY-5Y", notional=1_000_000_000,
             fixed_rate=0.005, float_rate=0.01, tenor_years=5.0,
             currency="JPY",
@@ -700,15 +700,15 @@ class TestMultiCurrencySwaps:
         assert abs(jpy_swap.npv - expected_jpy) < 1.0
 
     def test_three_currency_portfolio(self):
-        usd = InterestRateSwap(
+        usd = IRSwapFixedFloatApprox(
             symbol="USD-10Y", notional=10_000_000,
             fixed_rate=0.035, float_rate=0.04, tenor_years=10.0, currency="USD",
         )
-        eur = InterestRateSwap(
+        eur = IRSwapFixedFloatApprox(
             symbol="EUR-5Y", notional=8_000_000,
             fixed_rate=0.025, float_rate=0.03, tenor_years=5.0, currency="EUR",
         )
-        jpy = InterestRateSwap(
+        jpy = IRSwapFixedFloatApprox(
             symbol="JPY-7Y", notional=1_000_000_000,
             fixed_rate=0.005, float_rate=0.008, tenor_years=7.0, currency="JPY",
         )
@@ -738,7 +738,7 @@ class TestBatchCurveShift:
         assert df_after != df_before
 
     def test_batch_update_swap(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="BATCH-001", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.04, tenor_years=5.0,
         )
@@ -831,7 +831,7 @@ class TestEdgeCases:
     """Edge cases for the IRS domain."""
 
     def test_very_short_tenor(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="SHORT", notional=10_000_000,
             fixed_rate=0.04, float_rate=0.05, tenor_years=0.25,
         )
@@ -839,7 +839,7 @@ class TestEdgeCases:
         assert swap.dv01 == 10_000_000 * 0.25 * 0.0001
 
     def test_very_long_tenor(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="LONG", notional=10_000_000,
             fixed_rate=0.03, float_rate=0.05, tenor_years=30.0,
         )
@@ -849,7 +849,7 @@ class TestEdgeCases:
         assert swap.dv01 == 10_000_000 * 30.0 * 0.0001
 
     def test_zero_notional(self):
-        swap = InterestRateSwap(
+        swap = IRSwapFixedFloatApprox(
             symbol="ZERO", notional=0.0,
             fixed_rate=0.04, float_rate=0.05, tenor_years=5.0,
         )
@@ -873,11 +873,11 @@ class TestEdgeCases:
 
     def test_portfolio_with_mixed_pnl(self):
         """Portfolio with some profitable, some losing swaps."""
-        winner = InterestRateSwap(
+        winner = IRSwapFixedFloatApprox(
             symbol="WIN", notional=10_000_000,
             fixed_rate=0.02, float_rate=0.05, tenor_years=5.0,
         )
-        loser = InterestRateSwap(
+        loser = IRSwapFixedFloatApprox(
             symbol="LOSE", notional=10_000_000,
             fixed_rate=0.06, float_rate=0.03, tenor_years=5.0,
         )

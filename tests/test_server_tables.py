@@ -71,6 +71,7 @@ def _publish_tables():
             c = random.uniform(-2, 2)
             prices.write_row(sym, p, p - 0.1, p + 0.1,
                              int(500000 + random.random() * 1e6), c, c / p * 100)
+            pos = random.randint(100, 10000)
             risk.write_row(sym, p, pos, p * pos, c * pos,
                            0.5 + random.random() * 0.3, 0.02 + random.random() * 0.04,
                            -0.1 - random.random() * 0.15, 0.2 + random.random() * 0.2)

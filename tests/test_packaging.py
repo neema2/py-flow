@@ -53,8 +53,10 @@ _PKG_TO_EXTRAS: dict[str, list[str]] = {
     "db": [],
     "workflow": [],
     "bridge": [],
-    "scheduler": [],
+    "scheduler": ["scheduler"],
     "models": [],
+    "marketmodel": ["pricing"],
+    "instruments": ["pricing"],
     "objectstore": ["lakehouse", "media"],
     "streaming": ["streaming"],
 }

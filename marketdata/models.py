@@ -41,6 +41,7 @@ class RiskTick(BaseModel):
 class FXTick(BaseModel):
     """A single FX spot tick."""
     type: Literal["fx"] = "fx"
+    symbol: str         # "USD/JPY" (alias for pair)
     pair: str           # "USD/JPY"
     bid: float
     ask: float
@@ -53,7 +54,8 @@ class FXTick(BaseModel):
 class CurveTick(BaseModel):
     """A single yield curve point tick."""
     type: Literal["curve"] = "curve"
-    label: str          # "USD_5Y"
+    symbol: str         # "IR_USD_DISC_USD.5Y"
+    label: str          # "USD_5Y" (compat)
     tenor_years: float
     rate: float
     discount_factor: float
@@ -61,22 +63,50 @@ class CurveTick(BaseModel):
     timestamp: datetime
 
 
+class SwapTick(BaseModel):
+    """A single swap par rate quote (e.g. OIS)."""
+    type: Literal["swap"] = "swap"
+    symbol: str         # "USD_OIS_5Y"
+    currency: str       # "USD"
+    tenor: float        # 5.0
+    rate: float
+    bid: float
+    ask: float
+    timestamp: datetime
+
+
+class JacobianTick(BaseModel):
+    """A single fitter sensitivity entry: ∂pillar_rate / ∂quote_rate."""
+    type: Literal["jacobian"] = "jacobian"
+    symbol: str         # "IR_USD_YC_JACOBIAN.5Y.10Y"
+    output_tenor: float
+    input_tenor: float
+    value: float
+    timestamp: datetime
+
+
 # Discriminated union of all market data message types
 MarketDataMessage = Annotated[
-    Tick | FXTick | CurveTick,
+    Tick | FXTick | CurveTick | SwapTick | JacobianTick,
     Field(discriminator="type"),
 ]
 
 
-def get_symbol_key(msg: Tick | FXTick | CurveTick) -> str:
+def get_symbol_key(msg: Any) -> str:
     """Extract the symbol/pair/label key from any market data message."""
-    if isinstance(msg, Tick):
+    t = getattr(msg, "type", None)
+    if t == "equity":
         return msg.symbol
-    if isinstance(msg, FXTick):
-        return msg.pair
-    if isinstance(msg, CurveTick):
-        return msg.label
-    raise ValueError(f"Unknown message type: {type(msg)}")
+    if t == "fx":
+        return msg.symbol if hasattr(msg, "symbol") else msg.pair
+    if t == "curve":
+        return msg.symbol
+    if t == "swap":
+        return msg.symbol
+    if t == "jacobian":
+        return msg.symbol
+    
+    raise ValueError(f"Unknown message type: {t}")
 
 
 class Subscription(BaseModel):

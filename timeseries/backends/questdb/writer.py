@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import timezone
 
-from marketdata.models import CurveTick, FXTick, Tick
+from marketdata.models import CurveTick, FXTick, Tick, SwapTick, JacobianTick
 from questdb.ingress import Sender
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,8 @@ _TABLE_MAP = {
     "equity": "equity_ticks",
     "fx": "fx_ticks",
     "curve": "curve_ticks",
+    "swap": "swap_ticks",
+    "jacobian": "jacobian_ticks",
 }
 
 # Auto-flush thresholds
@@ -60,7 +62,7 @@ class QuestDBWriter:
                 "QuestDBWriter closed (total written: %d)", self._total_written
             )
 
-    async def write_tick(self, msg: Tick | FXTick | CurveTick) -> None:
+    async def write_tick(self, msg: Tick | FXTick | CurveTick | SwapTick | JacobianTick) -> None:
         """Buffer a tick for writing. Auto-flushes based on count/time."""
         if self._sender is None:
             raise RuntimeError("QuestDBWriter not connected")
@@ -98,7 +100,7 @@ class QuestDBWriter:
         assert isinstance(s, _Sender), "QuestDBWriter not connected"
         return s
 
-    def _write_row(self, table: str, msg: Tick | FXTick | CurveTick) -> None:
+    def _write_row(self, table: str, msg: Tick | FXTick | CurveTick | SwapTick | JacobianTick) -> None:
         """Write a single row to the ILP buffer."""
         from questdb.ingress import TimestampNanos
 
@@ -143,6 +145,29 @@ class QuestDBWriter:
                     "tenor_years": msg.tenor_years,
                     "rate": msg.rate,
                     "discount_factor": msg.discount_factor,
+                },
+                at=ts_nanos,
+            )
+        elif isinstance(msg, SwapTick):
+            sender.row(
+                table,
+                symbols={"symbol": msg.symbol, "currency": msg.currency},
+                columns={
+                    "tenor": msg.tenor,
+                    "bid": msg.bid,
+                    "ask": msg.ask,
+                    "rate": msg.rate,
+                },
+                at=ts_nanos,
+            )
+        elif isinstance(msg, JacobianTick):
+            sender.row(
+                table,
+                symbols={"symbol": msg.symbol},
+                columns={
+                    "output_tenor": msg.output_tenor,
+                    "input_tenor": msg.input_tenor,
+                    "value": msg.value,
                 },
                 at=ts_nanos,
             )

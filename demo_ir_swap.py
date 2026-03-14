@@ -3,22 +3,13 @@
 Demo: Interest Rate Swap — Fully Reactive Grid via Market Data Hub
 ===================================================================
 
-Consumes FX ticks from the Market Data Server (port 8000).  Every
-computation AND every Deephaven push is expressed as @computed or
+Consumes USD OIS swap rate ticks from the Market Data Server (port 8000).
+Every computation AND every Deephaven push is expressed as @computed or
 @effect — the WS consumer loop is a single batch_update() call.
 
-The reactive chain (triggered by each FX tick):
-  FXSpot.batch_update(bid, ask)
-    → @computed mid
-    → @effect on_mid          → fx_writer.write_row(...)
-    → @computed YieldCurvePoint.rate   (cross-entity: reads fx_ref.mid)
-      → @computed discount_factor
-      → @effect on_rate        → curve_writer.write_row(...) + queue CurveTick
-    → @computed InterestRateSwap.float_rate  (cross-entity: reads curve_ref.rate)
-      → @computed npv, dv01, pnl_status
-      → @effect on_npv         → swap_writer.write_row(...)
-    → @computed SwapPortfolio.total_npv      (cross-entity: reads swaps[].npv)
-      → @effect on_total_npv   → portfolio_writer.write_row(...)
+Instruments are imported from instruments/:
+    instruments/yield_curve.py — YieldCurvePoint, YieldCurve (interpolation)
+    instruments/ir_swap.py     — SwapQuote, IRSwapFixedFloatApprox, SwapPortfolio
 
 Usage:
   python3 demo_ir_swap.py
@@ -57,288 +48,105 @@ _md_server = MarketDataServer(port=8000)
 asyncio.run(_md_server.start())
 print(f"  Market data server started on port {_md_server.port}")
 
-# ── 2. Domain models — fully reactive (@computed + @effect) ──────────────
-from dataclasses import dataclass, field
+# ── 2. Import instrument models from instruments/ ─────────────────────────
+from streaming import agg, flush, get_tables
 
-from reactive.computed import computed, effect
-from streaming import agg, flush, get_tables, ticking
+from marketmodel.yield_curve import YieldCurvePoint, YieldCurve
+from marketmodel.curve_fitter import CurveFitter
+from marketmodel.symbols import fit_symbol, tenor_name
+from marketmodel.swap_curve import SwapQuote, SwapQuoteRisk
+from instruments.ir_swap_fixed_floatapprox import IRSwapFixedFloatApprox, SwapPortfolio
 
-from store import Storable
+# ── 3. Build reactive objects — cross-entity refs wired at construction ───
+print("  Building reactive objects...")
 
-# Publish queue: @effect on YieldCurvePoint.rate enqueues CurveTicks here;
-# the WS consumer drains them and sends back to the market data hub.
-_curve_publish_queue: deque = deque()
+# 1. Market Quotes (Inputs)
+swap_quotes = {
+    "IR_USD_OIS_QUOTE.1Y":  SwapQuote(symbol="IR_USD_OIS_QUOTE.1Y",  tenor=1.0,  rate=0.01),
+    "IR_USD_OIS_QUOTE.5Y":  SwapQuote(symbol="IR_USD_OIS_QUOTE.5Y",  tenor=5.0,  rate=0.05),
+    "IR_USD_OIS_QUOTE.10Y": SwapQuote(symbol="IR_USD_OIS_QUOTE.10Y", tenor=10.0, rate=0.10),
+    "IR_USD_OIS_QUOTE.20Y": SwapQuote(symbol="IR_USD_OIS_QUOTE.20Y", tenor=20.0, rate=0.20),
+}
 
+# 2. Curve Pillars (Fitted Outputs)
+curve_points = {}
+for q_sym, q in swap_quotes.items():
+    t_label = tenor_name(q.tenor)
+    label = fit_symbol("USD", t_label)
+    curve_points[label] = YieldCurvePoint(
+        label=label, symbol=label, tenor_years=q.tenor,
+        currency="USD", quote_ref=q, is_fitted=True,
+    )
 
-@ticking
-@dataclass
-class FXSpot(Storable):
-    """Live FX spot rate.  @effect pushes every mid change to DH."""
-    __key__ = "pair"
+# 3. YieldCurve entity
+usd_curve = YieldCurve(
+    name="USD_OIS", currency="USD",
+    points=list(curve_points.values())
+)
 
-    pair: str = ""
-    bid: float = 0.0
-    ask: float = 0.0
-    currency: str = ""
+# 4. Target Swaps for the Fitter
+# To fit precisely, the solver targets a swap at each pillar tenor
+target_swaps = []
+for q in swap_quotes.values():
+    target_swaps.append(IRSwapFixedFloatApprox(
+        symbol=q.symbol, notional=50_000_000,
+        fixed_rate=q.rate, tenor_years=q.tenor,
+        curve=usd_curve, is_target=True,  # Hidden from live board
+    ))
 
-    @computed
-    def mid(self):
-        return (self.bid + self.ask) / 2
-
-    @computed
-    def spread_pips(self):
-        return (self.ask - self.bid) * 10000
-
-    @effect("mid")
-    def on_mid(self, value):
-        self.tick()
-
-
-@ticking(exclude={"base_rate", "sensitivity", "fx_base_mid"})
-@dataclass
-class YieldCurvePoint(Storable):
-    """Single curve point.  rate is @computed from fx_ref.mid (cross-entity)."""
-    __key__ = "label"
-
-    label: str = ""
-    tenor_years: float = 0.0
-    base_rate: float = 0.0
-    sensitivity: float = 0.5
-    currency: str = "USD"
-    fx_ref: object = None
-    fx_base_mid: float = 0.0
-
-    @computed
-    def rate(self):
-        if self.fx_ref is None:
-            return self.base_rate
-        fx_base = self.fx_base_mid
-        if fx_base == 0.0:
-            return self.base_rate
-        pct_move = (self.fx_ref.mid - fx_base) / fx_base  # type: ignore[attr-defined]
-        return max(0.0001, self.base_rate + self.sensitivity * pct_move)
-
-    @computed
-    def discount_factor(self):
-        return 1.0 / (1.0 + self.rate) ** self.tenor_years
-
-    @effect("rate")
-    def on_rate(self, value):
-        self.tick()
-        _curve_publish_queue.append({
-            "type": "curve",
-            "label": self.label,
-            "tenor_years": self.tenor_years,
-            "rate": self.rate,
-            "discount_factor": self.discount_factor,
-            "currency": self.currency,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+# 5. Global Fitter — the writer that publishes fitted rates
+fitter = CurveFitter(
+    name="USD_OIS_FITTER", currency="USD",
+    target_swaps=target_swaps,
+    quotes=list(swap_quotes.values()),
+    curve=usd_curve,
+    points=list(curve_points.values())
+)
+# Initial solve
+print("  Solving initial curve...")
+fitter.solve()
+print("  Curve solved.")
 
 
-@ticking
-@dataclass
-class InterestRateSwap(Storable):
-    """IRS pricing.  float_rate is @computed from curve_ref.rate (cross-entity)."""
-    __key__ = "symbol"
+# 6. Interest Rate Swaps (Portfolio)
+# Slimming to one 7Y swap as requested to test interpolation risk split
+swaps = {
+    "USD-7Y": IRSwapFixedFloatApprox(
+        symbol="USD-7Y", notional=100_000_000, fixed_rate=0.07,
+        tenor_years=7.0, curve=usd_curve,
+    )
+}
 
-    symbol: str = ""
-    notional: float = 0.0
-    fixed_rate: float = 0.0
-    tenor_years: float = 0.0
-    currency: str = "USD"
-    curve_ref: object = None
-
-    @computed
-    def float_rate(self):
-        if self.curve_ref is None:
-            return 0.0
-        return self.curve_ref.rate  # type: ignore[attr-defined]
-
-    @computed
-    def fixed_leg_pv(self):
-        df = 1.0 / (1.0 + self.fixed_rate) ** self.tenor_years
-        return self.notional * self.fixed_rate * self.tenor_years * df
-
-    @computed
-    def float_leg_pv(self):
-        df = 1.0 / (1.0 + self.float_rate) ** self.tenor_years
-        return self.notional * self.float_rate * self.tenor_years * df
-
-    @computed
-    def npv(self):
-        float_df = 1.0 / (1.0 + self.float_rate) ** self.tenor_years
-        fixed_df = 1.0 / (1.0 + self.fixed_rate) ** self.tenor_years
-        float_pv = self.notional * self.float_rate * self.tenor_years * float_df
-        fixed_pv = self.notional * self.fixed_rate * self.tenor_years * fixed_df
-        return float_pv - fixed_pv
-
-    @computed
-    def dv01(self):
-        return self.notional * self.tenor_years * 0.0001
-
-    @computed
-    def pnl_status(self) -> str:
-        float_df = 1.0 / (1.0 + self.float_rate) ** self.tenor_years
-        fixed_df = 1.0 / (1.0 + self.fixed_rate) ** self.tenor_years
-        float_pv = self.notional * self.float_rate * self.tenor_years * float_df
-        fixed_pv = self.notional * self.fixed_rate * self.tenor_years * fixed_df
-        npv = float_pv - fixed_pv
-        if npv > 0:
-            return "PROFIT"
-        if npv < 0:
-            return "LOSS"
-        return "FLAT"
-
-    @effect("npv")
-    def on_npv(self, value):
-        self.tick()
+# Swap portfolio — @computed aggregates react to child swap changes
+portfolio_name = "USD_OIS_MGMT"
+portfolio = SwapPortfolio(name=portfolio_name, swaps=list(swaps.values()))
 
 
-@ticking
-@dataclass
-class SwapPortfolio(Storable):
-    """Aggregate portfolio.  @computed reads child swap NPVs (cross-entity)."""
-    __key__ = "name"
-
-    name: str = ""
-    swaps: list = field(default_factory=list)
-
-    @computed
-    def total_npv(self):
-        return sum(s.npv for s in self.swaps) if self.swaps else 0.0
-
-    @computed
-    def total_dv01(self):
-        return sum(s.dv01 for s in self.swaps) if self.swaps else 0.0
-
-    @computed
-    def max_npv(self):
-        return max(s.npv for s in self.swaps) if self.swaps else 0.0
-
-    @computed
-    def min_npv(self):
-        return min(s.npv for s in self.swaps) if self.swaps else 0.0
-
-    @computed
-    def swap_count(self) -> int:
-        return len(self.swaps) if self.swaps else 0
-
-    @effect("total_npv")
-    def on_total_npv(self, value):
-        self.tick()
-
-
-# ── 3. Publish @ticking tables to DH global scope ────────────────────────
+# ── 4. Publish @ticking tables to DH global scope ────────────────────────
 tables = get_tables()
 
 # Aggregates
-swap_summary = InterestRateSwap._ticking_live.agg_by([  # type: ignore[attr-defined]
+swap_summary = IRSwapFixedFloatApprox._ticking_live.agg_by([  # type: ignore[attr-defined]
     agg.sum(["TotalNPV=npv", "TotalDV01=dv01"]),
     agg.count("NumSwaps"),
     agg.avg(["AvgNPV=npv"]),
-])
+], by=[])
 tables["swap_summary"] = swap_summary
+tables["swap_risk_ladder"] = SwapQuoteRisk._ticking_live # type: ignore[attr-defined]
+tables["swap_portfolio_live"] = SwapPortfolio._ticking_live    # type: ignore[attr-defined]
+tables["yield_curve_live"] = usd_curve._ticking_live            # type: ignore[attr-defined]
 
+print(f"  Publishing {len(tables)} tables to Deephaven...")
 for name, tbl in tables.items():
     tbl.publish(name)
-
-
-# ── 4. Build reactive objects — cross-entity refs wired at construction ───
-print("  Building reactive objects...")
-
-# FX spots (initial values match market data server's FX_BASE)
-fx_spots = {
-    "USD/JPY": FXSpot(pair="USD/JPY", bid=149.50, ask=149.60, currency="JPY"),
-    "EUR/USD": FXSpot(pair="EUR/USD", bid=1.0850, ask=1.0855, currency="USD"),
-    "GBP/USD": FXSpot(pair="GBP/USD", bid=1.2700, ask=1.2710, currency="USD"),
-}
-
-# Benchmark FX refs: which FX pair drives each currency's curve
-_usd_fx = fx_spots["EUR/USD"]
-_jpy_fx = fx_spots["USD/JPY"]
-
-# Yield curve points (USD) — rate is @computed from fx_ref.mid
-usd_curve_data = [
-    ("USD_3M",  0.25, 0.0525),
-    ("USD_1Y",  1.0,  0.0490),
-    ("USD_2Y",  2.0,  0.0445),
-    ("USD_5Y",  5.0,  0.0410),
-    ("USD_10Y", 10.0, 0.0395),
-    ("USD_30Y", 30.0, 0.0420),
-]
-usd_curve_points = {}
-for label, tenor, base_rate in usd_curve_data:
-    usd_curve_points[label] = YieldCurvePoint(
-        label=label, tenor_years=tenor, base_rate=base_rate,
-        sensitivity=0.5, currency="USD",
-        fx_ref=_usd_fx, fx_base_mid=_usd_fx.mid,
-    )
-
-# JPY curve points — driven by USD/JPY
-jpy_curve_data = [
-    ("JPY_1Y",  1.0,  0.001),
-    ("JPY_5Y",  5.0,  0.005),
-    ("JPY_10Y", 10.0, 0.008),
-]
-jpy_curve_points = {}
-for label, tenor, base_rate in jpy_curve_data:
-    jpy_curve_points[label] = YieldCurvePoint(
-        label=label, tenor_years=tenor, base_rate=base_rate,
-        sensitivity=0.5, currency="JPY",
-        fx_ref=_jpy_fx, fx_base_mid=_jpy_fx.mid,
-    )
-
-all_curve_points = {**usd_curve_points, **jpy_curve_points}
-
-# Interest rate swaps — float_rate is @computed from curve_ref.rate
-# Each swap references its tenor-matched curve point
-_swap_curve_map = {
-    "USD-5Y-A": "USD_5Y",
-    "USD-5Y-B": "USD_5Y",
-    "USD-10Y":  "USD_10Y",
-    "USD-2Y":   "USD_2Y",
-    "JPY-5Y":   "JPY_5Y",
-    "JPY-10Y":  "JPY_10Y",
-}
-
-swap_configs = [
-    ("USD-5Y-A", 50_000_000,  0.0400, 5.0,  "USD"),
-    ("USD-5Y-B", 25_000_000,  0.0380, 5.0,  "USD"),
-    ("USD-10Y",  100_000_000, 0.0395, 10.0, "USD"),
-    ("USD-2Y",   75_000_000,  0.0450, 2.0,  "USD"),
-    ("JPY-5Y",   5_000_000_000, 0.005, 5.0,  "JPY"),
-    ("JPY-10Y",  10_000_000_000, 0.008, 10.0, "JPY"),
-]
-
-swaps = {}
-for sym, notl, fixed, tenor, ccy in swap_configs:
-    swaps[sym] = InterestRateSwap(
-        symbol=sym, notional=notl, fixed_rate=fixed,
-        tenor_years=tenor, currency=ccy,
-        curve_ref=all_curve_points[_swap_curve_map[sym]],
-    )
-
-# Swap portfolios — @computed aggregates react to child swap changes
-usd_swaps = [s for s in swaps.values() if s.currency == "USD"]
-jpy_swaps = [s for s in swaps.values() if s.currency == "JPY"]
-
-portfolios = {
-    "ALL": SwapPortfolio(name="ALL", swaps=list(swaps.values())),
-    "USD": SwapPortfolio(name="USD", swaps=usd_swaps),
-    "JPY": SwapPortfolio(name="JPY", swaps=jpy_swaps),
-}
+    print(f"    [DH] Published table: {name}")
 
 # All initial DH pushes happened automatically via @effects during construction.
 # Just flush the DH update graph once.
 flush()
 
-# Drain initial CurveTick publishes (they'll be sent on first WS connect)
-_initial_curve_ticks = list(_curve_publish_queue)
-_curve_publish_queue.clear()
-
-print(f"  Built: {len(fx_spots)} FX spots, {len(all_curve_points)} curve points, "
-      f"{len(swaps)} swaps, {len(portfolios)} portfolios")
+print(f"  Built: {len(swap_quotes)} OIS quotes, {len(curve_points)} curve points, "
+      f"1 yield curve, {len(swaps)} swaps, 1 portfolio")
 print("  All initial state pushed to DH via @effect (no manual push needed)")
 
 
@@ -352,14 +160,14 @@ _log = logging.getLogger("irs-md-consumer")
 
 
 async def _consume_and_publish():
-    """Connect to the Market Data Server, consume FX ticks, publish curves back.
+    """Connect to the Market Data Server, consume OIS swap ticks.
 
-    Each FX tick triggers the FULL reactive cascade via a single batch_update():
-      batch_update(bid, ask)
-        → @computed mid          → @effect → fx_writer
-        → @computed rate         → @effect → curve_writer + CurveTick queue
-        → @computed float_rate   → @computed npv → @effect → swap_writer
-        → @computed total_npv    → @effect → portfolio_writer
+    Each OIS tick triggers the FULL reactive cascade via a single batch_update():
+      batch_update(rate=...)
+        → @effect on_rate        → DH write
+        → @computed curve rate   → @effect → DH write
+        → @computed float_rate   → @computed npv → @effect → DH write
+        → @computed total_npv    → @effect → DH write
 
     No imperative push functions — every DH write is an @effect side-effect.
     """
@@ -371,52 +179,120 @@ async def _consume_and_publish():
         try:
             _log.info("Connecting to Market Data Server at %s ...", MD_SERVER_URL)
             async with websockets.connect(MD_SERVER_URL) as ws:
-                # Subscribe to FX ticks only
-                await ws.send(json.dumps({"types": ["fx"]}))
-                _log.info("Connected — consuming FX ticks, full reactive cascade active")
+                # Subscribe to swap ticks only
+                await ws.send(json.dumps({"types": ["swap"]}))
+                _log.info("Connected — consuming USD OIS swap ticks, full reactive cascade active")
 
-                # Publish any initial CurveTicks
-                for ct in _initial_curve_ticks:
+                # Publish initial CurveTicks back to hub
+                for label, pt in curve_points.items():
+                    ct = {
+                        "type": "curve", "symbol": pt.symbol, "label": label,
+                        "tenor_years": pt.tenor_years,
+                        "rate": pt.rate,
+                        "discount_factor": pt.discount_factor,
+                        "currency": pt.currency,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
                     await ws.send(json.dumps(ct))
+
+                # Publish initial JacobianTicks back to hub
+                for entry in usd_curve.jacobian:
+                    jt = {
+                        "type": "jacobian", "symbol": entry.symbol,
+                        "output_tenor": entry.output_tenor,
+                        "input_tenor": entry.input_tenor,
+                        "value": entry.value,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await ws.send(json.dumps(jt))
 
                 async for msg_str in ws:
                     tick = json.loads(msg_str)
-                    if tick.get("type") != "fx":
+                    if tick.get("type") != "swap":
                         continue
 
-                    pair = tick["pair"]
-                    fx = fx_spots.get(pair)
-                    if fx is None:
+                    sq = swap_quotes.get(tick["symbol"])
+                    if sq is None:
                         continue
 
                     # ── THE ONLY IMPERATIVE CALL ──────────────────────
                     # Everything else is reactive: @computed recalcs +
                     # @effect DH pushes all fire inside batch_update().
-                    fx.batch_update(bid=tick["bid"], ask=tick["ask"])
-
-                    # Flush update graph (all writes already queued by @effects)
+                    sq.batch_update(rate=tick["rate"])
+                    
+                    # Trigger the global fitting 
+                    fitter.solve()
+                    
                     flush()
 
                     tick_count += 1
+                    print(f"  [Tick] Processed {tick['symbol']} #{tick_count}")
 
                     # Publish derived CurveTicks back to the hub
-                    while _curve_publish_queue:
-                        await ws.send(json.dumps(_curve_publish_queue.popleft()))
+                    for label, pt in curve_points.items():
+                        ct = {
+                            "type": "curve", "symbol": pt.symbol, "label": label,
+                            "tenor_years": pt.tenor_years,
+                            "rate": pt.rate,
+                            "discount_factor": pt.discount_factor,
+                            "currency": pt.currency,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await ws.send(json.dumps(ct))
 
-                    # Print summary every 10th tick
-                    if tick_count % 10 == 0:
-                        usdjpy = fx_spots["USD/JPY"].mid
-                        usd_5y = usd_curve_points["USD_5Y"].rate * 100
-                        jpy_10y = jpy_curve_points["JPY_10Y"].rate * 100
-                        p_all = portfolios["ALL"]
+                    # Publish derived JacobianTicks back to the hub
+                    for entry in usd_curve.jacobian:
+                        jt = {
+                            "type": "jacobian", "symbol": entry.symbol,
+                            "output_tenor": entry.output_tenor,
+                            "input_tenor": entry.input_tenor,
+                            "value": entry.value,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                        await ws.send(json.dumps(jt))
 
-                        print(
-                            f"  [{tick_count:4d}] "
-                            f"USD/JPY {usdjpy:.2f}  |  "
-                            f"USD 5Y: {usd_5y:.2f}%  |  "
-                            f"JPY 10Y: {jpy_10y:.3f}%  |  "
-                            f"Portfolio NPV: ${p_all.total_npv:+,.0f}"
-                        )
+                    # Print summary every tick (was every 5th)
+                    if True:
+                        # Use the new structured labels for lookup
+                        lbl_5y = fit_symbol("USD", "5Y")
+                        lbl_10y = fit_symbol("USD", "10Y")
+                        
+                        usd_5y = curve_points[lbl_5y].rate * 100
+                        usd_10y = curve_points[lbl_10y].rate * 100
+
+                        print("\n" + "-"*60)
+                        print(f"  SUMMARY TICK #{tick_count} | {tick['symbol']} {tick['rate']:.4%}")
+                        print(f"  USD 5Y: {usd_5y:.4f}%  |  USD 10Y: {usd_10y:.4f}%")
+                        print("-"*60)
+                        
+                        try:
+                            # Print a snapshot of the portfolio and risk ladder to console
+                            port_df = tables["swap_portfolio_live"].snapshot()
+                            risk_df = tables["swap_risk_ladder"].snapshot()
+                            swap_df = tables["interest_rate_swap_live"].snapshot()
+                            
+                            print("  [Live Portfolio Snapshot]")
+                            print(port_df.to_string(index=False))
+                            
+                            print("\n  [Live Swap NPV Breakdown]")
+                            # Showing legs to confirm they are non-zero
+                            cols = ["symbol", "fixed_leg_pv", "float_leg_pv", "npv", "dv01"]
+                            print(swap_df[cols].to_string(index=False))
+
+                            print("\n  [Live Risk Ladder Snapshot (Dedicated Table)]")
+                            # Only show non-zero risks for brevity
+                            if not risk_df.empty:
+                                ladder_cols = ["quote", "risk", "equiv_notional"]
+                                active_risk = risk_df[risk_df['risk'] != 0].copy()
+                                # Format equiv_notional for easier reading
+                                active_risk['equiv_notional'] = active_risk['equiv_notional'].apply(lambda x: f"{x/1e6:.1f}M")
+                                print(active_risk[ladder_cols].to_string(index=False))
+                            else:
+                                print("  (empty ladder)")
+                            print("-" * 60 + "\n")
+                            sys.stdout.flush()
+                        except Exception as snapshot_err:
+                            print(f"  (Failed to take console snapshot: {snapshot_err})")
 
         except Exception as e:
             _log.warning(
@@ -435,23 +311,21 @@ def _start_md_consumer():
 
 print()
 print("=" * 70)
-print("  DEMO READY — Fully Reactive IRS Grid via Market Data Hub")
+print("  DEMO READY — Fully Reactive IRS Grid via USD OIS Market Data")
 print("  Web UI:  http://localhost:10000")
 print()
 print("  Published tables (open in DH web IDE):")
-print("    fx_spot_live            — FX spot rates (from market data server)")
-print("    yield_curve_point_live  — yield curve points (@computed from FX)")
+print("    swap_quote_live         — USD OIS par rates (from market data server)")
+print("    yield_curve_point_live  — yield curve points (@computed from OIS quotes)")
 print("    interest_rate_swap_live — IRS pricing: NPV, DV01, PnL (@computed cascade)")
-print("    swap_summary            — aggregate NPV + DV01 (ticking)")
-print("    swap_portfolio_live     — portfolio breakdown: ALL / USD / JPY (@computed)")
-print()
-print("  Raw (append-only) tables: fx_spot_raw, yield_curve_point_raw,")
-print("    interest_rate_swap_raw, swap_portfolio_raw")
+print("    swap_summary            — aggregate NPV + DV01 (ticking summary)")
+print("    swap_risk_ladder        — portfolio risk ladder: ∂Portfolio / ∂Quote")
+print("    swap_portfolio_live     — portfolio total NPV (@computed status)")
 print()
 print("  Reactive chain (all from one batch_update):")
-print("    FX bid/ask → @computed mid → @computed rate → @computed float_rate")
+print("    OIS rate → @computed curve rate → @computed float_rate")
 print("    → @computed npv → @computed total_npv")
-print("    Every @effect fires automatically: DH push + CurveTick publish")
+print("    Every @effect fires automatically: DH push")
 print()
 print("  Press Ctrl+C to stop.")
 print("=" * 70)

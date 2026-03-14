@@ -165,6 +165,7 @@ def seeded_ticks(tsdb):
     for i, pair in enumerate(["EUR/USD", "GBP/USD"]):
         for j in range(3):
             ft = FXTick(
+                symbol=pair,
                 pair=pair,
                 bid=1.08 + i * 0.2 + j * 0.001,
                 ask=1.0805 + i * 0.2 + j * 0.001,
@@ -181,6 +182,7 @@ def seeded_ticks(tsdb):
     for i, label in enumerate(["USD_2Y", "USD_5Y"]):
         for j in range(2):
             ct = CurveTick(
+                symbol=label,
                 label=label,
                 tenor_years=2.0 + i * 3,
                 rate=0.04 + i * 0.005 + j * 0.001,

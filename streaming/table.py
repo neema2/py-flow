@@ -15,6 +15,7 @@ from __future__ import annotations
 import platform
 import logging
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable
@@ -36,26 +37,31 @@ def _get_remote_session() -> Any:
     global _REMOTE_SESSION, _REMOTE_SESSION_PID
     import os
     current_pid = os.getpid()
-    
+
     if _REMOTE_SESSION is not None and _REMOTE_SESSION_PID != current_pid:
-        # We were forked! Close old references safely if possible, but mostly abandon it to avoid hanging
+        # We were forked! Close old references safely if possible
         try:
             _REMOTE_SESSION.close()
-        except:
+        except Exception:
             pass
         _REMOTE_SESSION = None
 
-    if _REMOTE_SESSION is None:
-        try:
-            from pydeephaven import Session
-            _REMOTE_SESSION = Session(host="localhost", port=10000)
-            _REMOTE_SESSION_PID = current_pid
-        except ImportError:
-            logger.error("pydeephaven package not found. On ARM64, please run 'pip install pydeephaven'")
-            return None
-        except Exception as e:
-            logger.debug("Could not connect to Deephaven on localhost:10000: %s", e)
-            return None
+    if _REMOTE_SESSION is not None:
+        return _REMOTE_SESSION
+
+    port = int(os.environ.get("PORT_OFFSET", "0")) + 10000
+
+    try:
+        from pydeephaven import Session
+        _REMOTE_SESSION = Session(host="localhost", port=port)
+        _REMOTE_SESSION_PID = current_pid
+        logger.info("Connected to remote Deephaven on localhost:%d", port)
+    except ImportError:
+        logger.error("pydeephaven package not found. On ARM64, please run 'pip install pydeephaven'")
+        return None
+    except Exception as e:
+        # Don't log error here as this might be called during lazy init/collection
+        return None
     return _REMOTE_SESSION
 
 
@@ -132,6 +138,20 @@ def flush() -> None:
     _UG_REF.requestRefresh()
 
 
+@contextmanager
+def lock():
+    """Context manager for update-graph locking. No-op on ARM/Remote."""
+    if _is_remote():
+        yield
+        return
+
+    from deephaven.update_graph import shared_lock
+    from deephaven.execution_context import get_exec_ctx
+    ug = get_exec_ctx().update_graph
+    with shared_lock(ug):
+        yield
+
+
 def snapshot(table: "LiveTable") -> "pd.DataFrame":
     """Return a pandas DataFrame snapshot of the current table state.
 
@@ -150,16 +170,7 @@ def snapshot(table: "LiveTable") -> "pd.DataFrame":
 # ---------------------------------------------------------------------------
 
 class LiveTable:
-    """Read-only derived ticking table with auto-locked operations.
-
-    You obtain a ``LiveTable`` from ``TickingTable.last_by()``,
-    ``LiveTable.agg_by()``, etc.  You can derive further, snapshot to
-    pandas, or publish to the Deephaven query scope — but you cannot
-    write rows.
-
-    Every derivation method acquires the UG **shared lock** internally
-    so that callers never need to think about Deephaven locking.
-    """
+    """Read-only derived ticking table with auto-locked operations."""
 
     __slots__ = ("_table_instance", "_table_factory")
 
@@ -182,8 +193,9 @@ class LiveTable:
     def _derive(self, method_name: str, *args: Any, **kwargs: Any) -> LiveTable:
         """Derive a new LiveTable lazily."""
         def factory():
-            fn = getattr(self._table, method_name)
-            return fn(*args, **kwargs)
+            with lock():
+                fn = getattr(self._table, method_name)
+                return fn(*args, **kwargs)
         return LiveTable(factory)
 
     # -- derivation (all auto-locked) -------------------------------------
@@ -249,7 +261,15 @@ class LiveTable:
         table by *name*.
         """
         if _is_remote():
-            _get_remote_session().bind_table(name, self._table)
+            session = _get_remote_session()
+            if session is None:
+                 raise RuntimeError(
+                    "Deephaven session not available. On ARM64, ensure the Docker container "
+                    "is running (StreamingServer.start() should handle this)."
+                )
+            
+            # self._table triggers lazily initialization if this is a TickingTable
+            session.bind_table(name, self._table)
             return
 
         from deephaven.execution_context import get_exec_ctx
@@ -312,7 +332,7 @@ class TickingTable(LiveTable):
         self._writer_instance = None
         self._session = None
         self._pa_schema = None
-        
+
         if _is_remote():
             import pyarrow as pa
             self._pa_schema = pa.schema([(name, t) for name, t in self.resolved_schema.items()])
@@ -340,11 +360,23 @@ class TickingTable(LiveTable):
         _ = self._table
         return self._writer_instance
 
+    def _ensure_initialized(self) -> Any:
+        """Force table initialization and return the underlying table."""
+        return self._table
+
     def write_row(self, *values: Any) -> None:
+        if self._ensure_initialized() is None:
+            raise RuntimeError(
+                "Deephaven session not available. On ARM64, ensure the Docker container "
+                "is running (StreamingServer.start() should handle this)."
+            )
+        
         if _is_remote():
             import pyarrow as pa
             # pydeephaven.InputTable.add takes a Table.
             # Convert row to arrow table and import.
+            assert self._pa_schema is not None
+            assert self._session is not None
             arrays = [pa.array([v], type=self._pa_schema.field(i).type) for i, v in enumerate(values)]
             batch = pa.RecordBatch.from_arrays(arrays, schema=self._pa_schema)
             table = pa.Table.from_batches([batch])

@@ -152,6 +152,19 @@ REGISTRY.define("pair", str,
     synonyms=["currency pair", "ccy pair"],
 )
 
+REGISTRY.define("fx_base_mid", float,
+    description="Reference mid price of the base currency",
+    role="measure", unit="ratio",
+    category="fx",
+)
+
+REGISTRY.define("fx_ref", object,
+    description="Cross-entity reference to an FXTick",
+    role="attribute",
+    category="fx",
+)
+
+
 # ── Bonds ─────────────────────────────────────────────────────────
 
 REGISTRY.define("isin", str,
@@ -217,6 +230,7 @@ REGISTRY.define("notional", float,
     display_name="Notional",
     category="risk",
     synonyms=["notional amount", "exposure"],
+    allowed_prefixes=["leg1", "leg2"],
 )
 
 REGISTRY.define("daily_vol", float,
@@ -381,6 +395,27 @@ REGISTRY.define("float_rate", float,
     category="fixed_income",
 )
 
+REGISTRY.define("float_spread", float,
+    description="Spread added to the floating leg reference rate",
+    semantic_type="percentage",
+    role="measure",
+    unit="ratio",
+    format=".4%",
+    display_name="Float Spread",
+    category="fixed_income",
+)
+
+REGISTRY.define("par_rate", float,
+    description="The fixed rate at which the swap NPV is zero",
+    semantic_type="percentage",
+    role="measure",
+    unit="ratio",
+    format=".4%",
+    display_name="Par Rate",
+    category="fixed_income",
+    synonyms=["breakeven rate", "par swap rate"],
+)
+
 REGISTRY.define("currency", str,
     description="ISO currency code (e.g. USD, EUR, JPY)",
     semantic_type="identifier",
@@ -389,6 +424,26 @@ REGISTRY.define("currency", str,
     display_name="Currency",
     category="fx",
     synonyms=["ccy"],
+    allowed_prefixes=["leg1", "leg2", "collateral"],
+)
+
+REGISTRY.define("collateral_currency", str,
+    description="ISO currency code for collateral (e.g. USD, EUR, JPY)",
+    semantic_type="identifier",
+    role="dimension",
+    max_length=3,
+    display_name="Collateral Ccy",
+    category="fx",
+)
+
+REGISTRY.define("initial_fx", float,
+    description="Initial FX rate used to compute relative notionals",
+    semantic_type="ratio",
+    role="measure",
+    unit="ratio",
+    format=",.6f",
+    display_name="Initial FX",
+    category="fx",
 )
 
 REGISTRY.define("discount_factor", float,
@@ -407,6 +462,14 @@ REGISTRY.define("float_leg_pv", float,
     description="Present value of floating leg cash flows",
     role="measure", unit="USD",
     category="fixed_income",
+    allowed_prefixes=["leg1", "leg2"],
+)
+
+REGISTRY.define("exchange_notional", bool,
+    description="True if notionals are exchanged at start and maturity of the swap",
+    role="dimension",
+    category="fixed_income",
+    default=False,
 )
 
 REGISTRY.define("npv", float,
@@ -427,34 +490,99 @@ REGISTRY.define("pnl_status", str,
     category="risk",
 )
 
-REGISTRY.define("base_rate", float,
-    description="Base reference rate before adjustments",
-    role="measure", unit="ratio",
-    format=".4%",
+REGISTRY.define("curve", object,
+    description="Cross-entity reference to a YieldCurve instance",
+    role="attribute",
     category="fixed_income",
 )
 
-REGISTRY.define("sensitivity", float,
-    description="Rate sensitivity to underlying factor moves",
-    role="measure", unit="ratio",
-    category="risk",
-)
-
-REGISTRY.define("fx_base_mid", float,
-    description="Base FX mid price used for rate derivation",
-    role="measure", unit="price",
-    category="fx",
-)
-
-REGISTRY.define("fx_ref", object,
-    description="Cross-entity reference to an FXSpot instance",
+REGISTRY.define("discount_curve", object,
+    description="Cross-entity reference to a discount YieldCurve instance",
     role="attribute",
-    category="fx",
+    category="fixed_income",
+    allowed_prefixes=["leg1", "leg2"],
 )
 
-REGISTRY.define("curve_ref", object,
-    description="Cross-entity reference to a YieldCurvePoint instance",
+REGISTRY.define("projection_curve", object,
+    description="Cross-entity reference to a projection YieldCurve instance",
     role="attribute",
+    category="fixed_income",
+    allowed_prefixes=["leg1", "leg2"],
+)
+
+REGISTRY.define("quote_ref", object,
+    description="Cross-entity reference to a SwapQuote instance",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("points", list,
+    description="List of YieldCurvePoint objects forming a curve",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("pillar_tenors", list,
+    description="Sorted pillar tenors from the curve's points",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("pillar_rates", list,
+    description="Sorted pillar rates from the curve's points",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("pillar_names", list,
+    description="Sorted pillar names from the curve's points",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("tenor", float,
+    description="Swap instrument tenor in years",
+    role="attribute", unit="years",
+    category="fixed_income",
+)
+
+REGISTRY.define("point_count", int,
+    description="Number of pillar points on a yield curve",
+    role="measure", unit="count",
+    category="fixed_income",
+)
+
+REGISTRY.define("output_tenor", float,
+    description="Output tenor of a jacobian entry (fitted point)",
+    role="attribute", unit="years",
+    category="fixed_income",
+)
+
+REGISTRY.define("input_tenor", float,
+    description="Input tenor of a jacobian entry (quote)",
+    role="attribute", unit="years",
+    category="fixed_income",
+)
+
+REGISTRY.define("jacobian", list,
+    description="List of CurveJacobianEntry objects for the fitter jacobian",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("is_fitted", bool,
+    description="If True, the rate is set by a solver rather than a pass-through quote",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("fitted_rate", float,
+    description="Intermediate solver rate for a fitted pillar",
+    semantic_type="ratio",
+    role="measure",
+    unit="ratio",
+    format=",.6f",
+    display_name="Fitted Rate",
     category="fixed_income",
 )
 
@@ -473,6 +601,36 @@ REGISTRY.define("curve_slope", float,
 REGISTRY.define("swaps", list,
     description="List of interest rate swap objects",
     role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("target_swaps", list,
+    description="List of par swaps used as targets for the curve fitter",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("quotes", list,
+    description="List of market quotes being monitored by the fitter",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("quote_trigger", float,
+    description="Reactive signal that triggers when input quote rates change",
+    role="attribute",
+    category="fixed_income",
+)
+
+REGISTRY.define("portfolio", str,
+    description="Portfolio name or identifier",
+    role="dimension",
+    category="fixed_income",
+)
+
+REGISTRY.define("quote", str,
+    description="Market quote symbol or identifier",
+    role="dimension",
     category="fixed_income",
 )
 
@@ -613,5 +771,15 @@ REGISTRY.define("sector_weights", dict,
 REGISTRY.define("top_risk_contributors", list,
     description="Positions ranked by VaR contribution",
     role="attribute",
+    category="risk",
+)
+
+REGISTRY.define("equiv_notional", float,
+    description="Risk-equivalent benchmark notional",
+    semantic_type="currency_amount",
+    role="measure",
+    unit="USD",
+    format=",.0f",
+    display_name="Equiv Notional",
     category="risk",
 )

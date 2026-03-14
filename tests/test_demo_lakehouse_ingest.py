@@ -31,7 +31,7 @@ def lh(lakehouse_server):
 class TestDemoLakehouseIngest:
     """Mirrors demo_lakehouse_ingest.py — all 4 modes + transform."""
 
-    def test_append_mode(self, lh) -> None:
+    def test_all_ingest_modes(self, lh) -> None:
         """Append: two batches get distinct _batch_ids."""
         batch1 = [
             {"symbol": "AAPL", "score": 0.95, "signal": "BUY"},
@@ -56,8 +56,6 @@ class TestDemoLakehouseIngest:
         batch_ids = lh.query("SELECT DISTINCT _batch_id FROM lakehouse.default.ing_signals")
         assert len(batch_ids) == 2
 
-    def test_snapshot_mode(self, lh) -> None:
-        """Snapshot: v2 supersedes v1, _is_current marks active batch."""
         eod_v1 = [
             {"symbol": "AAPL", "position": 1000, "pnl": 5200.0},
             {"symbol": "MSFT", "position": 500, "pnl": -1200.0},
@@ -81,8 +79,6 @@ class TestDemoLakehouseIngest:
         total = lh.query("SELECT count(*) as n FROM lakehouse.default.ing_eod")
         assert total[0]["n"] == 5
 
-    def test_incremental_mode(self, lh) -> None:
-        """Incremental: upsert by primary key, full audit trail."""
         trades_v1 = [
             {"trade_id": "T001", "symbol": "AAPL", "price": 185.50, "status": "FILLED"},
             {"trade_id": "T002", "symbol": "MSFT", "price": 420.00, "status": "FILLED"},
@@ -109,8 +105,6 @@ class TestDemoLakehouseIngest:
         total = lh.query("SELECT count(*) as n FROM lakehouse.default.ing_trades")
         assert total[0]["n"] == 5
 
-    def test_bitemporal_mode(self, lh) -> None:
-        """Bitemporal: system time + business time versioning."""
         positions_v1 = [
             {"entity_id": "POS_AAPL", "symbol": "AAPL", "notional": 185000.0},
             {"entity_id": "POS_MSFT", "symbol": "MSFT", "notional": 84000.0},
@@ -136,8 +130,6 @@ class TestDemoLakehouseIngest:
         assert "_valid_from" in all_rows[0]
         assert "_valid_to" in all_rows[0]
 
-    def test_transform_snapshot(self, lh) -> None:
-        """Transform: SQL aggregation → Iceberg, snapshot mode."""
         n = lh.transform(
             "ing_signal_summary",
             """
@@ -157,8 +149,6 @@ class TestDemoLakehouseIngest:
         assert "cnt" in rows[0]
         assert "avg_score" in rows[0]
 
-    def test_summary_all_tables(self, lh) -> None:
-        """All demo tables exist and have rows."""
         tables = lh.tables()
         for expected in ["ing_signals", "ing_eod", "ing_trades", "ing_positions", "ing_signal_summary"]:
             assert expected in tables, f"Missing table: {expected}"

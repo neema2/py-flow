@@ -40,25 +40,51 @@ class Expr(ABC):
     # -- Arithmetic operators ------------------------------------------------
 
     def __add__(self, other: object) -> "Expr":
-        return BinOp("+", self, _wrap(other))
+        r = _wrap(other)
+        if isinstance(self, Const) and self.value == 0: return r
+        if isinstance(r, Const) and r.value == 0: return self
+        return BinOp("+", self, r)
 
     def __radd__(self, other: object) -> "Expr":
         return BinOp("+", _wrap(other), self)
 
     def __sub__(self, other: object) -> "Expr":
-        return BinOp("-", self, _wrap(other))
+        r = _wrap(other)
+        if isinstance(r, Const) and r.value == 0: return self
+        # Note: 0 - x is not x, but we could do UnaryOp("neg", x) if we want
+        return BinOp("-", self, r)
 
     def __rsub__(self, other: object) -> "Expr":
         return BinOp("-", _wrap(other), self)
 
     def __mul__(self, other: object) -> "Expr":
-        return BinOp("*", self, _wrap(other))
+        r = _wrap(other)
+        if isinstance(self, Const):
+            if self.value == 0: return Const(0.0)
+            if self.value == 1: return r
+        if isinstance(r, Const):
+            if r.value == 0: return Const(0.0)
+            if r.value == 1: return self
+        return BinOp("*", self, r)
 
     def __rmul__(self, other: object) -> "Expr":
-        return BinOp("*", _wrap(other), self)
+        l = _wrap(other)
+        if isinstance(l, Const):
+            if l.value == 0: return Const(0.0)
+            if l.value == 1: return self
+        if isinstance(self, Const):
+            if self.value == 0: return Const(0.0)
+            if self.value == 1: return l
+        return BinOp("*", l, self)
 
     def __truediv__(self, other: object) -> "Expr":
-        return BinOp("/", self, _wrap(other))
+        r = _wrap(other)
+        if isinstance(r, Const):
+            if r.value == 1: return self
+            if r.value == 0: return Const(0.0) # avoid div by zero in trees
+        if isinstance(self, Const) and self.value == 0:
+            return Const(0.0)
+        return BinOp("/", self, r)
 
     def __rtruediv__(self, other: object) -> "Expr":
         return BinOp("/", _wrap(other), self)
@@ -229,6 +255,61 @@ class Field(Expr):
 
     def to_json(self) -> dict:
         return {"type": "Field", "name": self.name}
+
+
+class VariableMixin:
+    """Mixin: any object with a `.name` attribute gains Expr-leaf behaviour.
+
+    This is the bridge between domain objects and the Expr tree. A class
+    that mixes this in can be used directly as a leaf node in expression
+    trees, supporting eval/to_sql/to_pure/diff.
+
+    The mixin does NOT inherit from Expr (to avoid operator-overloading
+    conflicts with @dataclass).  Instead, diff() and eval_cached() check
+    for isinstance(x, VariableMixin).
+    """
+
+    # Subclass must provide: self.name (str)
+
+    def expr_eval(self, ctx: dict) -> Any:
+        return ctx[self.name]
+
+    def expr_to_sql(self, col: str = "data") -> str:
+        return f'"{self.name}"'
+
+    def expr_to_pure(self, var: str = "$row") -> str:
+        return f"${self.name}"
+
+    def expr_to_json(self) -> dict:
+        return {"type": "Variable", "name": self.name}
+
+
+class Variable(Expr, VariableMixin):
+    """Standalone Expr leaf for a named variable (e.g. a market quote or pillar).
+
+    For domain objects (like YieldCurvePoint), prefer mixing in
+    VariableMixin directly so the object IS the leaf node.
+    This class exists for cases where you need a standalone leaf.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def eval(self, ctx: dict) -> Any:
+        return self.expr_eval(ctx)
+
+    def to_sql(self, col: str = "data") -> str:
+        return self.expr_to_sql(col)
+
+    def to_pure(self, var: str = "$row") -> str:
+        return self.expr_to_pure(var)
+
+    def to_json(self) -> dict:
+        return self.expr_to_json()
+
+    def __repr__(self) -> str:
+        return f"Variable({self.name!r})"
+
 
 
 # ---------------------------------------------------------------------------
@@ -568,10 +649,12 @@ class StrOp(Expr):
 # SQL helper
 # ---------------------------------------------------------------------------
 
-def _cast_numeric_sql(expr: Expr, col: str) -> str:
+def _cast_numeric_sql(expr, col: str) -> str:
     """If expr is a Field, cast the JSONB text extraction to float."""
     if isinstance(expr, Field):
         return f"({col}->>'{expr.name}')::float"
+    if isinstance(expr, VariableMixin):
+        return expr.expr_to_sql(col)
     return expr.to_sql(col)
 
 
@@ -582,6 +665,7 @@ def _cast_numeric_sql(expr: Expr, col: str) -> str:
 _NODE_REGISTRY = {
     "Const": Const,
     "Field": Field,
+    "Variable": Variable,
     "BinOp": BinOp,
     "UnaryOp": UnaryOp,
     "Func": Func,
@@ -631,3 +715,166 @@ def from_json(data: dict) -> Expr:
         return node
 
     raise ValueError(f"Unknown expression type: {node_type}")
+
+
+# ---------------------------------------------------------------------------
+# Symbolic Differentiation
+# ---------------------------------------------------------------------------
+
+def diff(expr: Expr, wrt: str, _memo: dict | None = None) -> Expr:
+    """Symbolic differentiation: ∂expr/∂Variable(wrt).
+
+    Returns a new Expr tree representing the derivative.
+    This enables risk calculations that compile to any target:
+        risk = diff(npv_expr, "USD_OIS_5Y")
+        risk.eval(ctx)   → Python float
+        risk.to_sql()    → SQL expression
+
+    Memoized: the same sub-expression differentiated w.r.t. the same
+    variable returns the same Expr object.  This is critical because
+    product/power rules create new references to existing sub-trees,
+    and without memoization the derivative tree grows exponentially.
+
+    Supports: +, -, *, /, **, neg, abs, Const, Variable, Field.
+    """
+    if _memo is None:
+        _memo = {}
+
+    key = (id(expr), wrt)
+    if key in _memo:
+        return _memo[key]
+
+    result = _diff_impl(expr, wrt, _memo)
+    _memo[key] = result
+    return result
+
+
+def _diff_impl(expr: Expr, wrt: str, memo: dict) -> Expr:
+    """Non-memoized differentiation implementation."""
+    if isinstance(expr, Const):
+        return Const(0.0)
+
+    if isinstance(expr, (Variable, VariableMixin)):
+        return Const(1.0) if expr.name == wrt else Const(0.0)
+
+    if isinstance(expr, Field):
+        return Const(0.0)  # Fields are not differentiable market data
+
+    if isinstance(expr, BinOp):
+        dl = diff(expr.left, wrt, memo)
+        dr = diff(expr.right, wrt, memo)
+
+        if expr.op == "+":
+            return dl + dr
+        if expr.op == "-":
+            return dl - dr
+        if expr.op == "*":
+            # Product rule: (fg)' = f'g + fg'
+            return dl * expr.right + expr.left * dr
+        if expr.op == "/":
+            # Quotient rule: (f/g)' = (f'g - fg') / g²
+            return (dl * expr.right - expr.left * dr) / (expr.right ** Const(2.0))
+        if expr.op == "**":
+            # Power rule for constant exponent: (f^n)' = n * f^(n-1) * f'
+            # Also handles variable base with constant exponent
+            n = expr.right
+            f = expr.left
+            df = diff(f, wrt, memo)
+            return n * (f ** (n - Const(1.0))) * df
+
+        raise ValueError(f"diff: unsupported BinOp '{expr.op}'")
+
+    if isinstance(expr, UnaryOp):
+        if expr.op == "neg":
+            return -diff(expr.operand, wrt, memo)
+        if expr.op == "abs":
+            # ∂|f|/∂x = sign(f) * f'  (undefined at 0, we use 0)
+            f = expr.operand
+            df = diff(f, wrt, memo)
+            return If(f > Const(0.0), df, If(f < Const(0.0), -df, Const(0.0)))
+        raise ValueError(f"diff: unsupported UnaryOp '{expr.op}'")
+
+    if isinstance(expr, If):
+        # Differentiate through both branches, keep condition unchanged
+        return If(expr.condition, diff(expr.then_, wrt, memo), diff(expr.else_, wrt, memo))
+
+    raise ValueError(f"diff: unsupported Expr type '{type(expr).__name__}'")
+
+
+# ---------------------------------------------------------------------------
+# Cached evaluation (for DAGs produced by memoized diff)
+# ---------------------------------------------------------------------------
+
+def eval_cached(expr: Expr, ctx: dict, _cache: dict | None = None) -> Any:
+    """Evaluate an Expr DAG with sub-expression caching.
+
+    After memoized diff(), the derivative is a DAG (not a tree).
+    Naive expr.eval(ctx) would re-evaluate shared sub-nodes exponentially.
+    This function caches by node id(), evaluating each unique node once.
+
+    Usage:
+        deriv = diff(npv_expr, "USD_OIS_5Y")
+        val = eval_cached(deriv, ctx)  # fast
+    """
+    if _cache is None:
+        _cache = {}
+
+    key = id(expr)
+    if key in _cache:
+        return _cache[key]
+
+    # Leaf nodes — evaluate directly (fast)
+    if isinstance(expr, Const):
+        result = expr.eval(ctx)
+    elif isinstance(expr, (Variable, VariableMixin)):
+        result = expr.expr_eval(ctx)
+    elif isinstance(expr, Field):
+        result = expr.eval(ctx)
+    elif isinstance(expr, BinOp):
+        left_val = eval_cached(expr.left, ctx, _cache)
+        right_val = eval_cached(expr.right, ctx, _cache)
+        op = expr.op
+        if op == "+":
+            result = left_val + right_val
+        elif op == "-":
+            result = left_val - right_val
+        elif op == "*":
+            result = left_val * right_val
+        elif op == "/":
+            result = left_val / right_val
+        elif op == "**":
+            result = left_val ** right_val
+        elif op == ">":
+            result = left_val > right_val
+        elif op == "<":
+            result = left_val < right_val
+        elif op == ">=":
+            result = left_val >= right_val
+        elif op == "<=":
+            result = left_val <= right_val
+        elif op == "==":
+            result = left_val == right_val
+        elif op == "!=":
+            result = left_val != right_val
+        else:
+            raise ValueError(f"eval_cached: unsupported BinOp '{op}'")
+    elif isinstance(expr, UnaryOp):
+        operand_val = eval_cached(expr.operand, ctx, _cache)
+        if expr.op == "neg":
+            result = -operand_val
+        elif expr.op == "abs":
+            result = abs(operand_val)
+        else:
+            raise ValueError(f"eval_cached: unsupported UnaryOp '{expr.op}'")
+    elif isinstance(expr, If):
+        cond = eval_cached(expr.condition, ctx, _cache)
+        if cond:
+            result = eval_cached(expr.then_, ctx, _cache)
+        else:
+            result = eval_cached(expr.else_, ctx, _cache)
+    else:
+        # Fallback to native eval for any other node types (e.g. Func, Coalesce, etc.)
+        result = expr.eval(ctx)
+
+    _cache[key] = result
+    return result

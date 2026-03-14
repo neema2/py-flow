@@ -176,48 +176,80 @@ class EmbeddedPGManager:
         if pg_ctl.exists() and os.access(pg_ctl, os.X_OK):
             return pg_ctl
 
-        url = _zonkyio_jar_url()
-        logger.info("Zonkyio PG binaries not found, downloading from %s...", url)
+        # Use project-level cache to avoid downloading per-test
+        project_root = Path(__file__).resolve().parent.parent
+        cache_dir = Path(os.environ.get("PY_FLOW_CACHE_DIR", project_root / ".cache" / "lakehouse"))
+        global_pg_home = cache_dir / f"pg-{ZONKYIO_PG_VERSION}"
+        global_pg_ctl = global_pg_home / "bin" / "pg_ctl"
 
-        self._data_dir.mkdir(parents=True, exist_ok=True)
-        jar_path = self._data_dir / "pg.jar"
+        if not (global_pg_ctl.exists() and os.access(global_pg_ctl, os.X_OK)):
+            url = _zonkyio_jar_url()
+            logger.info("Zonkyio PG binaries not found in cache, downloading from %s...", url)
+    
+            global_pg_home.parent.mkdir(parents=True, exist_ok=True)
+            jar_path = global_pg_home.parent / "pg.jar"
+    
+            import time
+            for attempt in range(5):
+                try:
+                    with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(300.0, read=300.0)) as resp:
+                        resp.raise_for_status()
+                        with open(jar_path, "wb") as f:
+                            for chunk in resp.iter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                    break
+                except Exception as e:
+                    logger.warning("Download failed on attempt %d: %s", attempt + 1, e)
+                    if attempt == 4:
+                        raise
+                    time.sleep(2)
+    
+            # Extract the JAR to find the .txz archive inside
+            extract_dir = global_pg_home.parent / "tmp_jar"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(jar_path, "r") as zf:
+                txz_names = [n for n in zf.namelist() if n.endswith(".txz")]
+                if not txz_names:
+                    raise RuntimeError("No .txz file found in zonkyio JAR")
+                zf.extract(txz_names[0], extract_dir)
+                txz_path = extract_dir / txz_names[0]
+    
+            # Extract the .txz into global_pg_home
+            global_pg_home.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(txz_path, "r:xz") as tf:
+                tf.extractall(path=global_pg_home)
+    
+            # Make binaries executable
+            bin_dir = global_pg_home / "bin"
+            if bin_dir.exists():
+                for binary in bin_dir.iterdir():
+                    if binary.is_file():
+                        binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP)
+    
+            jar_path.unlink()
+            import shutil
+            shutil.rmtree(extract_dir)
 
-        with httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
-            resp.raise_for_status()
-            with open(jar_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
+            logger.info("Installed zonkyio PG %s to cache %s", ZONKYIO_PG_VERSION, global_pg_home)
 
-        # Extract the JAR to find the .txz archive inside
-        extract_dir = self._data_dir / "tmp_jar"
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(jar_path, "r") as zf:
-            txz_names = [n for n in zf.namelist() if n.endswith(".txz")]
-            if not txz_names:
-                raise RuntimeError("No .txz file found in zonkyio JAR")
-            zf.extract(txz_names[0], extract_dir)
-            txz_path = extract_dir / txz_names[0]
+        if not global_pg_ctl.exists():
+            raise FileNotFoundError(f"pg_ctl not found after extraction: {global_pg_ctl}")
 
-        # Extract the .txz into pg_home
-        self._pg_home.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(txz_path, "r:xz") as tf:
-            tf.extractall(path=self._pg_home)
+        # Symlink or copy to the test instance pg_home
+        self._pg_home.parent.mkdir(parents=True, exist_ok=True)
+        # Handle symlinks safely - Windows might not support it without admin
+        try:
+            if self._pg_home.exists():
+                import shutil
+                if self._pg_home.is_symlink():
+                    self._pg_home.unlink()
+                else:
+                    shutil.rmtree(self._pg_home)
+            os.symlink(global_pg_home, self._pg_home, target_is_directory=True)
+        except OSError:
+            import shutil
+            shutil.copytree(global_pg_home, self._pg_home)
 
-        # Make binaries executable
-        bin_dir = self._pg_home / "bin"
-        if bin_dir.exists():
-            for binary in bin_dir.iterdir():
-                if binary.is_file():
-                    binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP)
-
-        jar_path.unlink()
-        import shutil
-        shutil.rmtree(extract_dir)
-
-        if not pg_ctl.exists():
-            raise FileNotFoundError(f"pg_ctl not found after extraction: {pg_ctl}")
-
-        logger.info("Installed zonkyio PG %s to %s", ZONKYIO_PG_VERSION, self._pg_home)
         return pg_ctl
 
 
@@ -529,37 +561,63 @@ class LakekeeperManager:
         if binary.exists() and os.access(binary, os.X_OK):
             return binary
 
-        logger.info("Lakekeeper binary not found, downloading v%s...", LAKEKEEPER_VERSION)
-        archive_name = _lakekeeper_archive_name()
-        url = f"{LAKEKEEPER_BASE_URL}/v{LAKEKEEPER_VERSION}/{archive_name}"
+        # Use project-level cache to avoid downloading per-test
+        project_root = Path(__file__).resolve().parent.parent
+        cache_dir = Path(os.environ.get("PY_FLOW_CACHE_DIR", project_root / ".cache" / "lakehouse"))
+        global_bin_dir = cache_dir / f"lakekeeper-{LAKEKEEPER_VERSION}"
+        global_binary = global_bin_dir / "lakekeeper"
+
+        if not (global_binary.exists() and os.access(global_binary, os.X_OK)):
+            logger.info("Lakekeeper binary not found in cache, downloading v%s...", LAKEKEEPER_VERSION)
+            archive_name = _lakekeeper_archive_name()
+            url = f"{LAKEKEEPER_BASE_URL}/v{LAKEKEEPER_VERSION}/{archive_name}"
+
+            global_bin_dir.mkdir(parents=True, exist_ok=True)
+            archive_path = global_bin_dir / archive_name
+
+            import time
+            for attempt in range(5):
+                try:
+                    with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(300.0, read=300.0)) as resp:
+                        resp.raise_for_status()
+                        with open(archive_path, "wb") as f:
+                            for chunk in resp.iter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                    break
+                except Exception as e:
+                    logger.warning("Download failed on attempt %d: %s", attempt + 1, e)
+                    if attempt == 4:
+                        raise
+                    time.sleep(2)
+            logger.info("Downloaded %s to cache", archive_name)
+
+            with tarfile.open(archive_path, "r:gz") as tf:
+                tf.extractall(path=global_bin_dir)
+
+            archive_path.unlink()
+
+            # Find the binary (may be in a subdirectory)
+            if not global_binary.exists():
+                for candidate in global_bin_dir.rglob("lakekeeper"):
+                    if candidate.is_file():
+                        candidate.rename(global_binary)
+                        break
+
+            if global_binary.exists():
+                global_binary.chmod(global_binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+        if not global_binary.exists():
+            raise FileNotFoundError(f"Lakekeeper binary not found after extraction in {global_bin_dir}")
 
         bin_dir.mkdir(parents=True, exist_ok=True)
-        archive_path = bin_dir / archive_name
-
-        with httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
-            resp.raise_for_status()
-            with open(archive_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=65536):
-                    f.write(chunk)
-        logger.info("Downloaded %s", archive_name)
-
-        with tarfile.open(archive_path, "r:gz") as tf:
-            tf.extractall(path=bin_dir)
-
-        archive_path.unlink()
-
-        # Find the binary (may be in a subdirectory)
-        if not binary.exists():
-            for candidate in bin_dir.rglob("lakekeeper"):
-                if candidate.is_file():
-                    candidate.rename(binary)
-                    break
-
-        if binary.exists():
-            binary.chmod(binary.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-
-        if not binary.exists():
-            raise FileNotFoundError(f"Lakekeeper binary not found after extraction in {bin_dir}")
-
+        # Symlink or copy to the test instance
+        try:
+            if binary.exists():
+                binary.unlink()
+            os.symlink(global_binary, binary)
+        except OSError:
+            import shutil
+            shutil.copy2(global_binary, binary)
+            
         logger.info("Lakekeeper v%s installed to %s", LAKEKEEPER_VERSION, binary)
         return binary

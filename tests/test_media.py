@@ -43,11 +43,11 @@ class TestDetectContentType:
 
 def _make_pdf(text: str) -> bytes:
     """Create a minimal PDF with the given text."""
-    import pymupdf
-    doc = pymupdf.open()
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.Document()
     page = doc.new_page()
     assert page is not None
-    page.insert_text((72, 72), text, fontsize=12)  # type: ignore[unreachable]
+    page.insert_text((72, 72), text, fontsize=12)
     data = doc.tobytes()
     doc.close()
     return data
@@ -73,8 +73,8 @@ class TestExtractPDF:
         assert "Credit default swap" in result
 
     def test_empty_pdf(self):
-        import pymupdf
-        doc = pymupdf.open()
+        pymupdf = pytest.importorskip("pymupdf")
+        doc = pymupdf.Document()
         doc.new_page()  # blank page
         data = doc.tobytes()
         doc.close()

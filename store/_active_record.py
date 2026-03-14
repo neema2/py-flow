@@ -21,6 +21,7 @@ except ImportError:
 from typing import Any, ClassVar, TypeVar
 
 
+
 from store.query_result import QueryResult
 
 

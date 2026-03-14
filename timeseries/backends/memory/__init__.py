@@ -15,7 +15,7 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from marketdata.models import CurveTick, FXTick, Tick
+from marketdata.models import CurveTick, FXTick, Tick, SwapTick, JacobianTick
 
 from timeseries.base import TSDBBackend
 from timeseries.models import Bar
@@ -23,8 +23,8 @@ from timeseries.models import Bar
 logger = logging.getLogger(__name__)
 
 # Same mappings as QuestDB backend — proves the abstraction works
-_SYMBOL_COL = {"equity": "symbol", "fx": "pair", "curve": "label"}
-_PRICE_COL = {"equity": "price", "fx": "mid", "curve": "rate"}
+_SYMBOL_COL = {"equity": "symbol", "fx": "pair", "curve": "label", "swap": "symbol", "jacobian": "symbol"}
+_PRICE_COL = {"equity": "price", "fx": "mid", "curve": "rate", "swap": "rate", "jacobian": "value"}
 
 # Interval string → timedelta
 _INTERVAL_TD = {
@@ -63,7 +63,7 @@ class MemoryBackend(TSDBBackend):
         self._started = False
         logger.info("MemoryBackend stopped (held %d ticks)", self.tick_count)
 
-    async def write_tick(self, msg: Tick | FXTick | CurveTick) -> None:
+    async def write_tick(self, msg: Tick | FXTick | CurveTick | SwapTick | JacobianTick) -> None:
         row = msg.model_dump()
         ts = msg.timestamp
         if ts.tzinfo is None:

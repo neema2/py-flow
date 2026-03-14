@@ -157,12 +157,24 @@ class _MinIOBackend(ObjectStore):
     async def ensure_bucket(self, bucket: str) -> None:
         """Create a bucket if it doesn't exist."""
         try:
+            import urllib3
             from minio import Minio
+            http_client = urllib3.PoolManager(
+                timeout=urllib3.Timeout.DEFAULT_TIMEOUT,
+                retries=urllib3.Retry(
+                    total=3,
+                    backoff_factor=0.2,
+                    status_forcelist=[500, 502, 503, 504],
+                ),
+            )
+            http_client.connection_pool_kw['timeout'] = 5.0
+            
             client = Minio(
                 f"localhost:{self._api_port}",
                 access_key=self._access_key,
                 secret_key=self._secret_key,
                 secure=False,
+                http_client=http_client,
             )
             if not client.bucket_exists(bucket):
                 client.make_bucket(bucket)
@@ -174,15 +186,16 @@ class _MinIOBackend(ObjectStore):
 
     def _ensure_binary(self) -> Path:
         """Ensure MinIO binary is available, downloading if needed."""
-        bin_dir = self._data_dir / "bin"
-        binary = bin_dir / "minio"
+        # Use a shared cache directory to avoid re-downloading for every temp data_dir
+        cache_dir = Path.home() / ".cache" / "py-flow" / "minio"
+        binary = cache_dir / "minio"
         if binary.exists() and os.access(binary, os.X_OK):
             return binary
 
         logger.info("Object store binary not found, downloading...")
         url = _minio_download_url()
 
-        bin_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
         with httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
             resp.raise_for_status()

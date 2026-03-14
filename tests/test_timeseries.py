@@ -185,11 +185,11 @@ async def test_consumer_routes_ticks_to_backend():
         volume=1000, change=0.5, change_pct=0.33, timestamp=now,
     )
     fx_tick = FXTick(
-        pair="EUR/USD", bid=1.084, ask=1.086, mid=1.085,
+        symbol="EUR/USD", pair="EUR/USD", bid=1.084, ask=1.086, mid=1.085,
         spread_pips=2.0, currency="USD", timestamp=now,
     )
     curve_tick = CurveTick(
-        label="USD_5Y", tenor_years=5.0, rate=0.04,
+        symbol="USD_5Y", label="USD_5Y", tenor_years=5.0, rate=0.04,
         discount_factor=0.82, currency="USD", timestamp=now,
     )
 

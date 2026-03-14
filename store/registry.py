@@ -244,8 +244,17 @@ class ColumnRegistry:
                     f"is not defined in the column registry"
                 ) from None
 
-            # Type check
-            if field_type != col_def.python_type:
+            # Type check: allow subclasses if col_def.python_type is object or a base class
+            is_match = (field_type == col_def.python_type)
+            
+            # If not exact match, check sub-classing (for cross-entity refs)
+            if not is_match and isinstance(field_type, type) and isinstance(col_def.python_type, type):
+                if col_def.python_type is object:
+                    is_match = True
+                elif issubclass(field_type, col_def.python_type):
+                    is_match = True
+
+            if not is_match:
                 ft_name = getattr(field_type, '__name__', str(field_type))
                 ct_name = getattr(col_def.python_type, '__name__', str(col_def.python_type))
                 raise RegistryError(

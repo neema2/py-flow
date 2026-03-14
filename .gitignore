@@ -19,3 +19,5 @@ datacube/static/perspective-viewer-datagrid.js
 .demo_runs/
 *.whl
 pginstall/
+.cache/
+test_logs/

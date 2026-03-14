@@ -36,7 +36,7 @@ if [ "${SKIP_CLEANUP:-}" != "1" ]; then
 fi
 
 # ── Run demo tests ─────────────────────────────────────────────────
-LOG_DIR=".test_runs"
+LOG_DIR="${LOG_DIR:-.test_runs}"
 mkdir -p "$LOG_DIR"
 LOGFILE="$LOG_DIR/$(date +%Y%m%d_%H%M%S)_demo.txt"
 

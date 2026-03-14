@@ -129,11 +129,23 @@ REGISTRY.define("active", bool,
     role="attribute",
 )
 
+REGISTRY.define("is_target", bool,
+    description="Internal solver/target flag",
+    semantic_type="toggle",
+    role="attribute",
+)
+
 REGISTRY.define("created", datetime,
     description="Creation timestamp",
     semantic_type="timestamp",
     role="attribute",
     nullable=True,
+)
+
+REGISTRY.define("quote_symbol", str,
+    description="Associated market quote symbol",
+    semantic_type="identifier",
+    role="dimension",
 )
 
 

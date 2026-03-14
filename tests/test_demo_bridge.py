@@ -206,21 +206,18 @@ class TestDemoBridge:
         snap = snapshot(setup["orders_raw"])
         assert len(snap) >= 3  # At least: AAPL + MSFT original + MSFT update
 
-    def test_reactive_position_computed(self, tracked_positions) -> None:
+    def test_reactive_positions(self, tracked_positions) -> None:
         """@computed market_value and risk_score recompute on price change."""
         pos = ensure_tracked(tracked_positions, "NVDA", 875.0, 200)
         assert pos.market_value == 875.0 * 200
         assert pos.risk_score == 875.0 * 200 * 0.02
 
-    def test_reactive_position_update(self, tracked_positions) -> None:
         """batch_update triggers @computed recalc + @effect → DH push."""
-        pos = tracked_positions["NVDA"]
         pos.batch_update(price=880.0, quantity=200)
         flush()
         assert pos.market_value == 880.0 * 200
         assert pos.risk_score == 880.0 * 200 * 0.02
 
-    def test_multiple_positions(self, tracked_positions) -> None:
         """Track multiple symbols — same as demo's loop."""
         for sym, price, qty in [("AAPL", 228.0, 500), ("MSFT", 415.0, 300),
                                  ("TSLA", 355.0, 150)]:

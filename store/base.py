@@ -212,12 +212,11 @@ class Storable(ActiveRecordMixin):
                 else:
                     # Cross-entity: call original function with reactive proxy
                     def _make_cross(func: Callable[..., Any], obj: Any, ov_sig: Signal) -> Callable[[], Any]:
-                        proxy = _ReactiveProxy(obj)
                         def compute() -> Any:
                             ov = ov_sig()
                             if ov is not _UNSET:
                                 return ov
-                            return func(proxy)
+                            return func(obj)
                         return compute
                     comp = Computed(_make_cross(cp.fn, self, override_sig))
 
@@ -260,9 +259,15 @@ class Storable(ActiveRecordMixin):
 
     def __getattribute__(self, name: str) -> Any:
         """Route reactive field/computed reads through Signals/Computeds."""
-        node = object.__getattribute__(self, '_reactive').get(name)
+        # Avoid recursion on _reactive
+        if name == "_reactive" or name.startswith("__"):
+            return object.__getattribute__(self, name)
+            
+        reactive = object.__getattribute__(self, '_reactive')
+        node = reactive.get(name)
         if node is not None:
-            return node.read()
+            val = node.read()
+            return val
         return object.__getattribute__(self, name)
 
     def __setattr__(self, name: str, value: object) -> None:
